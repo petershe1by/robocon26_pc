@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypespec="1.0"?>
+<package format="3">
+  <name>robocom_bringup</name>
+  <version>1.0.0</version>
+  <description>Launch files, autostart scripts & global params for RoboCom</description>
+  <maintainer email="team@robocom.local">robocom-team</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>robocom_interfaces</exec_depend>
+  <exec_depend>robocom_math_solver</exec_depend>
+  <exec_depend>robocom_localization</exec_depend>
+  <exec_depend>robocom_navigation</exec_depend>
+  <exec_depend>robocom_motion_control</exec_depend>
+  <exec_depend>robocom_vision</exec_depend>
+  <exec_depend>robocom_arm_control</exec_depend>
+  <exec_depend>robocom_task_scheduler</exec_depend>
+  <exec_depend>robocom_ui</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

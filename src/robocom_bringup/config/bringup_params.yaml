@@ -1,0 +1,12 @@
+/**:  # 全局参数
+  ros__parameters:
+    /localization/odom_topic: "/odom"
+    /motion_control/serial_port: "auto"
+    /motion_control/serial_baud: 100000
+    /math_solver/camera_id: 0
+    /math_solver/timeout_sec: 20.0
+    /navigation/max_linear_speed: 0.8
+    /navigation/position_tolerance: 500.0
+    /yolo_block_detector/confidence_threshold: 0.5
+    /color_mask_detector/camera_id: 1
+    /task_scheduler/match_duration: 180.0

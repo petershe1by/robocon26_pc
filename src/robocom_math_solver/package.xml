@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypespec="1.0"?>
+<package format="3">
+  <name>robocom_math_solver</name>
+  <version>1.0.0</version>
+  <description>OCR-based math quiz solver for RoboCom mission task (20s watchdog)</description>
+  <maintainer email="team@robocom.local">robocom-team</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>robocom_interfaces</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

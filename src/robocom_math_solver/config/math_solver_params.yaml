@@ -1,0 +1,7 @@
+/math_solver_node:
+  ros__parameters:
+    camera_id: 0
+    image_width: 1600
+    image_height: 900
+    timeout_sec: 20.0
+    tts_enabled: true

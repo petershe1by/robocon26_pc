@@ -1,0 +1,29 @@
+# ROS2
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Models (large files - download separately)
+src/robocom_vision/models/*.pt
+src/robocom_vision/models/*.onnx
+!src/robocom_vision/models/.gitkeep
+
+# Config overrides
+*.local.yaml

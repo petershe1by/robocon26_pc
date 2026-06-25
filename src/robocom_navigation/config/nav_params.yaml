@@ -1,0 +1,5 @@
+/navigation_node:
+  ros__parameters:
+    max_linear_speed: 0.8        # 最大线速度 (归一化)
+    max_angular_speed: 0.5       # 最大角速度 (归一化)
+    position_tolerance: 500.0    # 到达容差 (mm)

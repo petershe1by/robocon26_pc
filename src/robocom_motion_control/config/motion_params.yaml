@@ -1,0 +1,6 @@
+/motion_control_node:
+  ros__parameters:
+    serial_port: "auto"          # 串口: /dev/ttyACM0 或 auto
+    serial_baud: 100000
+    sbus_freq: 100.0             # SBUS 帧率 (Hz)
+    motion_watchdog_sec: 5.0     # 运动看门狗超时

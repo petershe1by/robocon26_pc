@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypespec="1.0"?>
+<package format="3">
+  <name>robocom_motion_control</name>
+  <version>1.0.0</version>
+  <description>Quadruped gait control & USB CDC SBUS bridge for RoboCom</description>
+  <maintainer email="team@robocom.local">robocom-team</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>robocom_interfaces</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

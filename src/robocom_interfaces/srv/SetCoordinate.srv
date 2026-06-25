@@ -1,0 +1,7 @@
+# 设置坐标系原点
+string coordinate_name  # 坐标系名称: block_origin / exchange_origin / entrance_center
+float64 x               # x坐标 (mm)
+float64 y               # y坐标 (mm)
+---
+bool success
+string message

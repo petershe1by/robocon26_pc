@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypespec="1.0"?>
+<package format="3">
+  <name>robocom_vision</name>
+  <version>1.0.0</version>
+  <description>Vision package: YOLO block detection, color mask exchange zone, D435 depth assist</description>
+  <maintainer email="team@robocom.local">robocom-team</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>robocom_interfaces</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
