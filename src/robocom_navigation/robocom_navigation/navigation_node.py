@@ -1,19 +1,22 @@
-#!/usr/bin/env python3
-"""
-navigation_node.py — 导航、安全与任务循环主节点
+﻿#!/usr/bin/env python3
+\"\"\"
+navigation_node.py - 导航、安全与任务循环主节点
 
 核心职责（任务 4、5、6）：
-  1. 电子围栏 —— 超出矩形边界则急停
-  2. 避障 —— 物资箱周围 700mm 不可到达圆
-  3. 限速 —— 雷达融合速度 ≤ 1.5 m/s，> 2.5 m/s 失能
-  4. 任务循环 —— 目标点导航 → YOLO 视觉 → 吸取 → 兑换 → 循环
-  5. 安全看门狗 —— 5s 指令不变则停止
+  1. 电子围栏 - 超出矩形边界则急停
+  2. 避障 - 物资箱周围 700mm 不可到达圆
+  3. 限速 - 雷达融合速度 <= 1.5 m/s, > 2.5 m/s 失能
+  4. 任务循环 - 目标点导航 -> YOLO 视觉 -> 吸取 -> 兑换 -> 循环
+  5. 安全看门狗 - 5s 指令不变则停止
 
 通信接口：
   - 订阅：/robot_state, /block_info, /mission_status
-  - 发布：/motion_cmd, /arm_command, /enable_motion
+  - 发布：/motion_cmd（纯摇杆值 -1.0~1.0）, /arm_command, /enable_motion
   - 服务：/set_coordinate
-"""
+
+注意：MotionCmd 的 linear_x/linear_y/angular_z 都是纯摇杆信号（-1.0~1.0），
+      狗的移动位移完全由下位机 STM32 根据摇杆值自行控制。
+\"\"\"
 
 import math
 import time
@@ -38,10 +41,11 @@ SPEED_LIMIT = 1.5                   # m/s
 SPEED_ESTOP = 2.5                   # m/s
 POSITION_TOLERANCE = 500.0          # mm（到达目标点容差）
 EXCHANGE_TRIGGER_X_OFFSET = 3500.0  # mm
+JOYSTICK_MAX = 1.0                  # 最大摇杆值
 
 
 class NavigationNode(Node):
-    """导航、安全与任务循环主节点"""
+    \"\"\"导航、安全与任务循环主节点\"\"\"
 
     def __init__(self):
         super().__init__('navigation_node')
@@ -49,11 +53,7 @@ class NavigationNode(Node):
         self.coord = CoordinateManager()
 
         # ---------- 参数 ----------
-        self.declare_parameter('max_linear_speed', 0.8)
-        self.declare_parameter('max_angular_speed', 0.5)
         self.declare_parameter('position_tolerance', POSITION_TOLERANCE)
-        self._max_lin = self.get_parameter('max_linear_speed').value
-        self._max_ang = self.get_parameter('max_angular_speed').value
         self._pos_tol = self.get_parameter('position_tolerance').value
 
         # ---------- 状态 ----------
@@ -66,15 +66,15 @@ class NavigationNode(Node):
 
         # 任务状态
         self._mission_status = 'IDLE'
-        self._current_block_target = 0    # 当前目标物资箱编号
+        self._current_block_target = 0
         self._blocks_delivered = 0
-        self._blocks_data = {}            # block_id → BlockInfo
+        self._blocks_data = {}
         self._high_zone_id = -1
         self._high_zone_known = False
 
-        # 目标队列（顺序：8 个物资箱循环）
+        # 目标队列
         self._block_targets = list(range(8))
-        self._mission_phase = 'nav_to_block'  # nav_to_block / grasp / nav_to_exchange / place
+        self._mission_phase = 'nav_to_block'
 
         # ---------- 回调组 ----------
         self._cb_group_mutex = MutuallyExclusiveCallbackGroup()
@@ -99,7 +99,7 @@ class NavigationNode(Node):
         self.pub_vision_start = self.create_publisher(String, '/color_vision_start', 10)
 
         # ---------- 定时器 ----------
-        self.create_timer(0.1, self._control_loop, callback_group=self._cb_group_mutex)  # 10 Hz
+        self.create_timer(0.1, self._control_loop, callback_group=self._cb_group_mutex)
         self.create_timer(1.0, self._publish_mission_status)
 
         self.get_logger().info('NavigationNode 已启动')
@@ -124,13 +124,11 @@ class NavigationNode(Node):
         self._enabled = msg.data
 
     def _grasp_complete_cb(self, msg: Bool):
-        """吸取完成 → 前往兑换站"""
         if msg.data and self._mission_phase == 'grasp':
             self._mission_phase = 'nav_to_exchange'
             self.get_logger().info(f'物资箱 {self._current_block_target} 吸取完成，前往兑换站')
 
     def _place_complete_cb(self, msg: Bool):
-        """放置完成 → 前往下一个物资箱"""
         if msg.data and self._mission_phase == 'place':
             self._blocks_delivered += 1
             if self._blocks_delivered >= 8:
@@ -143,56 +141,49 @@ class NavigationNode(Node):
 
     # ------------------------------------------------------------------
     def _on_match_start(self, msg: String):
-        """一键启动 → 开始任务循环"""
         self._mission_status = 'MATH_SOLVING'
-        self._block_targets = list(range(8))  # 顺序可调整为随机
+        self._block_targets = list(range(8))
         self._current_block_target = self._block_targets[0]
         self._exchange_x_trigger = self.coord.x3 + EXCHANGE_TRIGGER_X_OFFSET
         self.get_logger().info('=== 任务循环启动 ===')
 
     # ------------------------------------------------------------------
     def _control_loop(self):
-        """10 Hz 控制循环：安全 + 导航 + 任务流转"""
+        \"\"\"10 Hz 控制循环：安全 + 导航 + 任务流转\"\"\"
         if not self._enabled:
             return
 
-        # 1. 电子围栏检查
         if self._check_fence():
-            return  # 超出边界，已急停
+            return
 
-        # 2. 限速检查
         self._check_speed_limit()
 
-        # 3. 任务阶段处理
         if self._mission_status in ('IDLE', 'MATH_SOLVING'):
-            return  # 等待解锁或数学题完成
+            return
 
-        # 获取当前目标点
         target = self._get_current_target()
         if target is None:
             return
 
         tx, ty, phase_info = target
 
-        # 4. 导航到目标点（避障）
-        cmd = self._plan_path(tx, ty)
+        # 路径规划输出纯摇杆值（-1.0~1.0）
+        cmd = self._gen_joystick_cmd(tx, ty)
         if cmd:
             self.pub_cmd.publish(cmd)
 
-        # 5. 到达目标判断 + 任务状态切换
+        # 到达判断
         dist = math.hypot(tx - self._x, ty - self._y)
-
         if dist < self._pos_tol:
             self._handle_arrival(target)
 
     # ------------------------------------------------------------------
     def _check_fence(self) -> bool:
-        """电子围栏检查：超出 4 点矩形则急停"""
         x_min, x_max, y_min, y_max = self.coord.get_fence_bounds()
         if not (x_min <= self._x <= x_max and y_min <= self._y <= y_max):
             self.get_logger().error(
                 f'!!! 电子围栏触发！({self._x:.0f}, {self._y:.0f}) '
-                f'超出 [{x_min:.0f}, {x_max:.0f}]×[{y_min:.0f}, {y_max:.0f}]'
+                f'超出 [{x_min:.0f}, {x_max:.0f}]x[{y_min:.0f}, {y_max:.0f}]'
             )
             estop = Bool(data=True)
             self.pub_estop.publish(estop)
@@ -203,9 +194,7 @@ class NavigationNode(Node):
             return True
         return False
 
-    # ------------------------------------------------------------------
     def _check_speed_limit(self):
-        """限速检查"""
         if self._velocity > SPEED_ESTOP:
             self.get_logger().error(
                 f'!!! 超速！当前 {self._velocity:.2f} m/s > {SPEED_ESTOP} m/s，失能!'
@@ -219,7 +208,6 @@ class NavigationNode(Node):
 
     # ------------------------------------------------------------------
     def _get_current_target(self) -> tuple | None:
-        """获取当前阶段的目标点"""
         if self._mission_phase == 'nav_to_block':
             blocks = self.coord.get_block_coordinates()
             if self._current_block_target < len(blocks):
@@ -227,7 +215,6 @@ class NavigationNode(Node):
                 return (bx, by, 'block')
         elif self._mission_phase == 'nav_to_exchange':
             stations = self.coord.get_exchange_coordinates()
-            # 前往此物资箱对应的兑换站编号
             exchange_id = self._current_block_target % 4
             if exchange_id < len(stations):
                 ex, ey, _ = stations[exchange_id]
@@ -235,36 +222,50 @@ class NavigationNode(Node):
         return None
 
     # ------------------------------------------------------------------
-    def _plan_path(self, tx: float, ty: float) -> MotionCmd | None:
-        """
-        路径规划：简单运动 + 避障（绕开物资箱 700mm 圆）
-        """
+    def _gen_joystick_cmd(self, tx: float, ty: float) -> MotionCmd | None:
+        \"\"\"
+        生成纯摇杆指令（-1.0 ~ 1.0），不涉及任何速度/位移计算。
+        下位机 STM32 根据摇杆值自行决定步态和行走速度。
+
+        逻辑：
+          - 计算目标方向与当前朝向的夹角 → angular_z（转向摇杆值）
+          - 距离远则推满前进摇杆，距离近则松摇杆
+          - 避障时叠加一个横向摇杆分量
+        \"\"\"
         cmd = MotionCmd()
         dx = tx - self._x
         dy = ty - self._y
         dist = math.hypot(dx, dy)
 
-        if dist < 50.0:  # 已到达
-            return None
+        if dist < 50.0:
+            return None  # 已到达，不发送运动指令
 
-        # 检查是否有障碍物阻碍
-        avoidance = self._check_obstacles(tx, ty)
-
-        # 计算期望 yaw
+        # 期望朝向（弧度）
         target_yaw = math.atan2(dy, dx)
         yaw_diff = self._normalize_angle(target_yaw - self._yaw)
 
-        # 避障偏移
+        # 避障检测
+        avoidance = self._check_obstacles(tx, ty)
+
+        # --- 转向摇杆值（angular_z = -1.0 ~ 1.0） ---
+        # yaw_diff 范围 -pi ~ pi, 映射到 -1.0 ~ 1.0
+        cmd.angular_z = max(-1.0, min(1.0, yaw_diff / math.pi))
+
+        # --- 前进摇杆值（linear_x = -1.0 ~ 1.0） ---
+        # 远距离推满杆，接近目标逐渐回中
+        if abs(yaw_diff) > 0.3:
+            # 偏角太大时先转向不走动
+            cmd.linear_x = 0.0
+        else:
+            cmd.linear_x = max(-1.0, min(1.0, dist / 2000.0))
+
+        # --- 横向摇杆值（避障偏移） ---
+        cmd.linear_y = 0.0
         if avoidance is not None:
             ax, ay = avoidance
-            # 朝向避障偏移方向
-            avoid_yaw = math.atan2(ay, ax)
-            yaw_diff = self._normalize_angle(avoid_yaw - self._yaw)
+            # 避障方向叠加到侧移摇杆
+            cmd.linear_y = max(-1.0, min(1.0, ax))
 
-        # 生成控制指令
-        cmd.linear_x = max(-self._max_lin, min(self._max_lin, dist / 1000.0))
-        cmd.linear_y = 0.0
-        cmd.angular_z = max(-self._max_ang, min(self._max_ang, yaw_diff))
         cmd.gait_mode = 1  # trot
         cmd.enable = True
         cmd.estop = False
@@ -273,7 +274,7 @@ class NavigationNode(Node):
 
     # ------------------------------------------------------------------
     def _check_obstacles(self, tx: float, ty: float) -> tuple | None:
-        """检查路径上的障碍物，返回避障偏移方向"""
+        \"\"\"检查路径上的障碍物，返回避障偏移方向\"\"\"
         zones = self.coord.get_block_obstacle_zones()
         path_dx = tx - self._x
         path_dy = ty - self._y
@@ -283,7 +284,6 @@ class NavigationNode(Node):
             return None
 
         for ox, oy, radius, bid in zones:
-            # 判断射线与圆是否相交
             dx = ox - self._x
             dy = oy - self._y
             t = (dx * path_dx + dy * path_dy) / (path_dist * path_dist)
@@ -294,7 +294,6 @@ class NavigationNode(Node):
             closest_dist = math.hypot(closest_x - ox, closest_y - oy)
 
             if closest_dist < radius:
-                # 需要避障：垂直方向推开
                 perp_x = -(oy - closest_y)
                 perp_y = ox - closest_x
                 perp_len = math.hypot(perp_x, perp_y)
@@ -304,14 +303,12 @@ class NavigationNode(Node):
 
     # ------------------------------------------------------------------
     def _handle_arrival(self, target: tuple):
-        """到达目标后的任务状态切换"""
         tx, ty, phase = target
 
         if phase == 'block':
             self._mission_phase = 'grasp'
             self._mission_status = 'GRASPING'
 
-            # 启动 YOLO 视觉节点，识别物块
             msg = String()
             msg.data = f'block_{self._current_block_target}'
             self.pub_yolo_start.publish(msg)
@@ -319,9 +316,8 @@ class NavigationNode(Node):
                 f'到达目标物资箱 {self._current_block_target}，启动 YOLO 视觉'
             )
 
-            # 发送机械臂到视觉识别状态
             arm_cmd = ArmCommand()
-            arm_cmd.state = 1  # 视觉识别
+            arm_cmd.state = 1
             arm_cmd.command_valid = True
             self.pub_arm.publish(arm_cmd)
 
@@ -329,7 +325,6 @@ class NavigationNode(Node):
             self._mission_phase = 'place'
             self._mission_status = 'PLACING'
 
-            # 启动颜色掩码视觉节点
             msg = String()
             msg.data = f'exchange_{self._current_block_target % 4}'
             self.pub_vision_start.publish(msg)
@@ -337,21 +332,19 @@ class NavigationNode(Node):
                 f'到达兑换站 {self._current_block_target % 4}，启动颜色识别'
             )
 
-            # 发送机械臂到放置状态
             arm_cmd = ArmCommand()
-            arm_cmd.state = 4  # 放置
+            arm_cmd.state = 4
             arm_cmd.command_valid = True
             self.pub_arm.publish(arm_cmd)
 
     # ------------------------------------------------------------------
     def _publish_mission_status(self):
-        """定时发布任务状态"""
         msg = MissionStatus()
         msg.status = self._mission_status
         msg.current_target = self._current_block_target
         msg.blocks_delivered = self._blocks_delivered
         msg.blocks_remaining = 8 - self._blocks_delivered
-        msg.score = self._blocks_delivered * 100  # 简化计分
+        msg.score = self._blocks_delivered * 100
         msg.high_zone_known = self._high_zone_known
         self.pub_mission.publish(msg)
 
