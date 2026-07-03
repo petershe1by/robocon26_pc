@@ -17,7 +17,7 @@ After=dev-ttyACM0.device
 
 [Service]
 Type=simple
-User=\$(whoami)
+User=\${SUDO_USER:-$(whoami)}
 Environment="ROS_DOMAIN_ID=0"
 Environment="RMW_IMPLEMENTATION=rmw_fastrtps_cpp"
 ExecStart=/usr/bin/python3 ${SCRIPT_PATH}

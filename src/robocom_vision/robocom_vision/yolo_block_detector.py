@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 yolo_block_detector.py — YOLO 物资箱检测节点（任务 8）
 
@@ -14,11 +14,13 @@ yolo_block_detector.py — YOLO 物资箱检测节点（任务 8）
 """
 
 import math
+import os
 
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String, Bool
 from robocom_interfaces.msg import ArmCommand
+from ament_index_python.packages import get_package_share_directory
 
 try:
     from ultralytics import YOLO
@@ -58,6 +60,11 @@ class YOLOBlockDetector(Node):
         self.declare_parameter('camera_id', 0)  # D435 color stream
 
         model_path = self.get_parameter('model_path').value
+        if not os.path.isabs(model_path):
+            pkg_share = get_package_share_directory('robocom_vision')
+            resolved = os.path.join(pkg_share, 'models', os.path.basename(model_path))
+            self.get_logger().info(f'模型路径解析: {model_path} -> {resolved}')
+            model_path = resolved
         conf_thres = self.get_parameter('confidence_threshold').value
         self._cam_id = self.get_parameter('camera_id').value
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 task_scheduler_node.py — 任务编排调度主节点
 
@@ -24,6 +24,7 @@ from rclpy.executors import MultiThreadedExecutor
 
 from robocom_interfaces.msg import MathResult, MissionStatus
 from robocom_interfaces.srv import StartMission
+from builtin_interfaces.msg import Duration
 from std_msgs.msg import String, Bool
 
 
@@ -116,13 +117,20 @@ class TaskSchedulerNode(Node):
 
     # ------------------------------------------------------------------
     def _math_watchdog(self):
-        """数学题超时看门狗：20 秒超时"""
+        """数学题超时看门狗：20 秒超时 -> 发布失败结果让导航继续"""
         time.sleep(self._math_timeout)
         if not self._math_solved:
             self.get_logger().warn(
                 f'数学题超时 ({self._math_timeout}s)，跳过继续比赛'
             )
-            # 超时也视为"已处理"，导航节点将继续
+            # 超时也发布 MathResult -> navigation_node 解除 MATH_SOLVING 阻塞
+            msg = MathResult()
+            msg.success = False
+            msg.high_zone_id = -1
+            msg.expression = ''
+            msg.result = 0
+            msg.elapsed_time = Duration(sec=int(self._math_timeout), nanosec=0)
+            self.pub_result.publish(msg)
 
     # ------------------------------------------------------------------
     def _watchdog(self):

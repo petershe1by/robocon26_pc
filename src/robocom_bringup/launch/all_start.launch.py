@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """all_start.launch.py - 启动所有 ROS2 节点"""
 
 from launch import LaunchDescription
@@ -41,4 +41,8 @@ def generate_launch_description():
              name='color_mask_detector', output='screen'),
         Node(package='robocom_vision', executable='depth_helper',
              name='depth_helper', output='screen'),
+
+        # UI 界面（如果启动文件已包含 UI，autostart.py 中则不再重复拉起）
+        Node(package='robocom_ui', executable='robocom_ui',
+             name='robocom_ui', output='screen'),
     ])

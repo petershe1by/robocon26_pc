@@ -101,12 +101,22 @@ class NavigationNode(Node):
         target = self._get_current_target()
         if not target:
             return
-        tx, ty, _ = target
-        cmd = self._gen_joystick_cmd(tx, ty)
+        tx, ty, target_id, phase = target
+        exclude_id = target_id if phase == 'block' else None
+        cmd = self._gen_joystick_cmd(tx, ty, exclude_block_id=exclude_id)
         if cmd:
             self.pub_cmd.publish(cmd)
         if math.hypot(tx - self._x, ty - self._y) < self._pos_tol:
-            self._handle_arrival(target)
+            self._handle_arrival(tx, ty, phase)
+
+    def _publish_stop_cmd(self):
+        stop = MotionCmd()
+        stop.linear_x = 0.0
+        stop.linear_y = 0.0
+        stop.angular_z = 0.0
+        stop.gait_mode = 1
+        stop.enable = True
+        self.pub_cmd.publish(stop)
 
     def _check_fence(self) -> bool:
         x_min, x_max, y_min, y_max = self.coord.get_fence_bounds()
@@ -134,7 +144,7 @@ class NavigationNode(Node):
                 return (*stations[eid], "exchange")
         return None
 
-    def _gen_joystick_cmd(self, tx: float, ty: float):
+    def _gen_joystick_cmd(self, tx: float, ty: float, exclude_block_id=None):
         cmd = MotionCmd()
         dx = tx - self._x; dy = ty - self._y
         dist = math.hypot(dx, dy)
@@ -142,20 +152,22 @@ class NavigationNode(Node):
             return None
         target_yaw = math.atan2(dy, dx)
         yaw_diff = self._normalize_angle(target_yaw - self._yaw)
-        avoid = self._check_obstacles(tx, ty)
+        avoid = self._check_obstacles(tx, ty, exclude_block_id=exclude_block_id)
         cmd.angular_z = max(-1.0, min(1.0, yaw_diff / math.pi))
         cmd.linear_x = 0.0 if abs(yaw_diff) > 0.3 else max(-1.0, min(1.0, dist / 2000.0))
         cmd.linear_y = max(-1.0, min(1.0, avoid[0])) if avoid else 0.0
         cmd.gait_mode = 1; cmd.enable = True
         return cmd
 
-    def _check_obstacles(self, tx, ty):
+    def _check_obstacles(self, tx, ty, exclude_block_id=None):
         zones = self.coord.get_block_obstacle_zones()
         path_dx = tx - self._x; path_dy = ty - self._y
         path_dist = math.hypot(path_dx, path_dy)
         if path_dist < 0.001:
             return None
-        for ox, oy, radius, _ in zones:
+        for ox, oy, radius, bid in zones:
+            if exclude_block_id is not None and bid == exclude_block_id:
+                continue
             t = max(0.0, min(1.0, ((ox - self._x) * path_dx + (oy - self._y) * path_dy) / (path_dist * path_dist)))
             cx = self._x + t * path_dx; cy = self._y + t * path_dy
             if math.hypot(cx - ox, cy - oy) < radius:
@@ -165,8 +177,8 @@ class NavigationNode(Node):
                     return (perp_x / pl, perp_y / pl)
         return None
 
-    def _handle_arrival(self, target):
-        _, _, phase = target
+    def _handle_arrival(self, tx: float, ty: float, phase: str):
+        self._publish_stop_cmd()
         if phase == "block":
             self._mission_phase = "grasp"; self._mission_status = "GRASPING"
             self.pub_yolo_start.publish(String(data=f"block_{self._current_block_target}"))
