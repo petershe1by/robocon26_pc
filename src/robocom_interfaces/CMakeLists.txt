@@ -19,9 +19,9 @@ set(srv_files
   "srv/StartMission.srv"
 )
 
-rosidl_generate_interfaces(\
-  \
-  \
+rosidl_generate_interfaces(${PROJECT_NAME}
+  ${msg_files}
+  ${srv_files}
   DEPENDENCIES builtin_interfaces
 )
 
