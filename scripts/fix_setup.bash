@@ -19,6 +19,17 @@ for _pkg in robocom_bringup robocom_navigation robocom_motion_control; do
     if [ -f "$_pkg_path/local_setup.bash" ]; then
       source "$_pkg_path/local_setup.bash"
     fi
+    # Ensure libexec directory exists (colcon bug workaround for Ubuntu 22.04)
+    if [ ! -d "$_pkg_path/lib/$_pkg" ]; then
+      mkdir -p "$_pkg_path/lib/$_pkg"
+      if [ -d "$_pkg_path/bin" ]; then
+        for _entry in "$_pkg_path"/bin/*; do
+          [ -f "$_entry" ] || continue
+          _name="$(basename "$_entry")"
+          ln -sf "$_entry" "$_pkg_path/lib/$_pkg/$_name"
+        done
+      fi
+    fi
   fi
 done
 
