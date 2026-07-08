@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
 """ui_main.py - PySide6 上位机主界面（任务 7）"""
-import sys, threading, time
+import sys, threading, time, json, os
+
+try:
+    import cv2
+    import numpy as np
+except ImportError:
+    cv2 = None
+    np = None
+
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
 from std_msgs.msg import String, Bool
 from robocom_interfaces.msg import RobotState, MathResult, MissionStatus
 from robocom_interfaces.srv import StartMission
+from robocom_interfaces.srv import SetCoordinate
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QGroupBox
+    QPushButton, QLabel, QGroupBox, QDoubleSpinBox, QGridLayout,
+    QMessageBox, QDialog, QComboBox
 )
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QPixmap, QImage
 
 
 class UINode(Node):
@@ -36,8 +46,11 @@ class UINode(Node):
         self.create_subscription(MathResult, '/math_result', self._math_cb, 10)
         self.create_subscription(MissionStatus, '/mission_status', self._mission_cb, 10)
         self._start_client = self.create_client(StartMission, '/start_mission')
+        self._set_coord_client = self.create_client(SetCoordinate, '/set_coordinate')
         while not self._start_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn('等待 /start_mission 服务...')
+        if not self._set_coord_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('等待 /set_coordinate 服务...')
 
     def _robot_cb(self, msg):
         self.robot_x = msg.x
@@ -69,6 +82,21 @@ class UINode(Node):
             pass
         return False
 
+    def set_coordinate(self, name: str, x: float, y: float) -> bool:
+        """调用 /set_coordinate 服务设定坐标原点"""
+        req = SetCoordinate.Request()
+        req.coordinate_name = name
+        req.x = x
+        req.y = y
+        future = self._set_coord_client.call_async(req)
+        try:
+            rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+            if future.result() and future.result().success:
+                return True
+        except Exception:
+            pass
+        return False
+
 
 class MainWindow(QMainWindow):
     """ROBOCON 上位机主界面"""
@@ -77,6 +105,7 @@ class MainWindow(QMainWindow):
     def __init__(self, ui_node):
         super().__init__()
         self._node = ui_node
+        self._coords_file = os.path.join(os.path.expanduser('~'), '.robocom_coords.json')
         self.setWindowTitle('ROBOCON 仿生足式机器人 - 任务赛上位机')
         self.setMinimumSize(1024, 768)
         self.setStyleSheet("""
@@ -112,6 +141,11 @@ class MainWindow(QMainWindow):
         self.lbl_timer = QLabel('⏱ 00:00')
         self.lbl_timer.setFont(QFont('Consolas', 20, QFont.Bold))
         l_start.addWidget(self.lbl_timer, 1)
+        self.btn_cam = QPushButton('📷 摄像头')
+        self.btn_cam.setMinimumHeight(40)
+        self.btn_cam.setStyleSheet("QPushButton { background-color: #8e44ad; color: white; border-radius: 6px; padding: 8px 16px; font-size: 12pt; } QPushButton:hover { background-color: #9b59b6; }")
+        self.btn_cam.clicked.connect(self._open_camera_preview)
+        l_start.addWidget(self.btn_cam, 1)
         layout.addWidget(g_start)
 
         # 信息面板
@@ -148,6 +182,52 @@ class MainWindow(QMainWindow):
         info.addWidget(g_prog, 1)
         layout.addLayout(info)
 
+        # === 坐标标定（x0/y0, x1/y1, x3/y3）===
+        g_calib = QGroupBox('场地坐标标定')
+        calib_layout = QGridLayout(g_calib)
+        calib_layout.setSpacing(8)
+
+        # 表头
+        calib_layout.addWidget(QLabel('坐标系'), 0, 0)
+        calib_layout.addWidget(QLabel('X (mm)'), 0, 1)
+        calib_layout.addWidget(QLabel('Y (mm)'), 0, 2)
+        calib_layout.addWidget(QLabel(''), 0, 3)
+
+        # x0, y0 — 物资箱原点（左下角物块中心）
+        calib_layout.addWidget(QLabel('物资箱 (x₀,y₀)'), 1, 0)
+        self.spin_x0 = QDoubleSpinBox(); self.spin_x0.setRange(-99999, 99999); self.spin_x0.setDecimals(1); self.spin_x0.setValue(0.0)
+        self.spin_y0 = QDoubleSpinBox(); self.spin_y0.setRange(-99999, 99999); self.spin_y0.setDecimals(1); self.spin_y0.setValue(0.0)
+        calib_layout.addWidget(self.spin_x0, 1, 1)
+        calib_layout.addWidget(self.spin_y0, 1, 2)
+        btn_apply0 = QPushButton('应用'); btn_apply0.setStyleSheet("QPushButton { background-color: #2980b9; color: white; border-radius: 4px; padding: 4px 16px; } QPushButton:hover { background-color: #3498db; }")
+        btn_apply0.clicked.connect(lambda: self._on_apply_coord('block_origin', self.spin_x0, self.spin_y0))
+        calib_layout.addWidget(btn_apply0, 1, 3)
+
+        # x1, y1 — 兑换站原点（最左侧兑换站中心）
+        calib_layout.addWidget(QLabel('兑换站 (x₁,y₁)'), 2, 0)
+        self.spin_x1 = QDoubleSpinBox(); self.spin_x1.setRange(-99999, 99999); self.spin_x1.setDecimals(1); self.spin_x1.setValue(0.0)
+        self.spin_y1 = QDoubleSpinBox(); self.spin_y1.setRange(-99999, 99999); self.spin_y1.setDecimals(1); self.spin_y1.setValue(0.0)
+        calib_layout.addWidget(self.spin_x1, 2, 1)
+        calib_layout.addWidget(self.spin_y1, 2, 2)
+        btn_apply1 = QPushButton('应用'); btn_apply1.setStyleSheet("QPushButton { background-color: #2980b9; color: white; border-radius: 4px; padding: 4px 16px; } QPushButton:hover { background-color: #3498db; }")
+        btn_apply1.clicked.connect(lambda: self._on_apply_coord('exchange_origin', self.spin_x1, self.spin_y1))
+        calib_layout.addWidget(btn_apply1, 2, 3)
+
+        # x3, y3 — 场地入口中心
+        calib_layout.addWidget(QLabel('入口中心 (x₃,y₃)'), 3, 0)
+        self.spin_x3 = QDoubleSpinBox(); self.spin_x3.setRange(-99999, 99999); self.spin_x3.setDecimals(1); self.spin_x3.setValue(0.0)
+        self.spin_y3 = QDoubleSpinBox(); self.spin_y3.setRange(-99999, 99999); self.spin_y3.setDecimals(1); self.spin_y3.setValue(0.0)
+        calib_layout.addWidget(self.spin_x3, 3, 1)
+        calib_layout.addWidget(self.spin_y3, 3, 2)
+        btn_apply3 = QPushButton('应用'); btn_apply3.setStyleSheet("QPushButton { background-color: #2980b9; color: white; border-radius: 4px; padding: 4px 16px; } QPushButton:hover { background-color: #3498db; }")
+        btn_apply3.clicked.connect(lambda: self._on_apply_coord('entrance_center', self.spin_x3, self.spin_y3))
+        calib_layout.addWidget(btn_apply3, 3, 3)
+
+        # 加载上次保存的坐标值
+        self._load_coords()
+
+        layout.addWidget(g_calib)
+
         # 进程监控
         g_log = QGroupBox('运行进程')
         l_log = QVBoxLayout(g_log)
@@ -178,6 +258,62 @@ class MainWindow(QMainWindow):
                 self.btn_start.setText('▶ 一键启动')
         threading.Thread(target=_do, daemon=True).start()
 
+    def _open_camera_preview(self):
+        """打开摄像头预览对话框"""
+        dlg = CameraPreviewDialog(self)
+        dlg.exec()
+
+    def _on_apply_coord(self, name: str, spin_x: QDoubleSpinBox, spin_y: QDoubleSpinBox):
+        """应用坐标到 /set_coordinate 服务"""
+        x = spin_x.value(); y = spin_y.value()
+        name_labels = {
+            'block_origin':     '物资箱原点',
+            'exchange_origin':  '兑换站原点',
+            'entrance_center':  '入口中心',
+        }
+        label = name_labels.get(name, name)
+
+        def _do():
+            ok = self._node.set_coordinate(name, x, y)
+            if ok:
+                self._save_coords()
+                self.lbl_status.setText(f'✓ {label} → ({x:.1f}, {y:.1f})')
+            else:
+                self.lbl_status.setText(f'✗ {label} 设置失败')
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _save_coords(self):
+        """将当前 spinbox 数值持久化到 JSON 文件"""
+        data = {
+            'block_origin':    {'x': self.spin_x0.value(), 'y': self.spin_y0.value()},
+            'exchange_origin': {'x': self.spin_x1.value(), 'y': self.spin_y1.value()},
+            'entrance_center': {'x': self.spin_x3.value(), 'y': self.spin_y3.value()},
+        }
+        try:
+            with open(self._coords_file, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
+    def _load_coords(self):
+        """从 JSON 文件恢复上次保存的坐标值"""
+        if not os.path.exists(self._coords_file):
+            return
+        try:
+            with open(self._coords_file) as f:
+                data = json.load(f)
+            if 'block_origin' in data:
+                self.spin_x0.setValue(data['block_origin'].get('x', 0.0))
+                self.spin_y0.setValue(data['block_origin'].get('y', 0.0))
+            if 'exchange_origin' in data:
+                self.spin_x1.setValue(data['exchange_origin'].get('x', 0.0))
+                self.spin_y1.setValue(data['exchange_origin'].get('y', 0.0))
+            if 'entrance_center' in data:
+                self.spin_x3.setValue(data['entrance_center'].get('x', 0.0))
+                self.spin_y3.setValue(data['entrance_center'].get('y', 0.0))
+        except Exception:
+            pass
+
     def _update(self):
         n = self._node
         self.lbl_coord.setText(f'X:   {n.robot_x:.1f} mm\nY:   {n.robot_y:.1f} mm\nYaw: {n.robot_yaw:.2f} rad')
@@ -195,6 +331,114 @@ class MainWindow(QMainWindow):
         if n.match_started:
             e = int(n.match_time)
             self.lbl_timer.setText(f'⏱ {e//60:02d}:{e%60:02d}')
+
+
+class CameraPreviewDialog(QDialog):
+    """摄像头实时预览对话框"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('摄像头实时预览')
+        self.setMinimumSize(720, 560)
+        self.setStyleSheet("""
+            QDialog { background-color: #1a1a2e; }
+            QLabel { color: #e0e0e0; }
+            QComboBox { color: #e0e0e0; background-color: #2c2c4e; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; }
+        """)
+
+        layout = QVBoxLayout(self)
+
+        # 摄像头选择栏
+        top_bar = QHBoxLayout()
+        top_bar.addWidget(QLabel('选择摄像头:'))
+        self.cam_combo = QComboBox()
+        self.cam_combo.addItems(['摄像头 0', '摄像头 1', '摄像头 2', '摄像头 3'])
+        self.cam_combo.currentIndexChanged.connect(self._switch_camera)
+        top_bar.addWidget(self.cam_combo)
+        top_bar.addStretch()
+        layout.addLayout(top_bar)
+
+        # 视频显示区域
+        self.video_label = QLabel()
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setMinimumSize(640, 480)
+        self.video_label.setStyleSheet("background-color: #000; border: 1px solid #555; border-radius: 4px;")
+        self.video_label.setText('正在打开摄像头...')
+        layout.addWidget(self.video_label)
+
+        # 状态栏
+        self.lbl_cam_status = QLabel('状态: 等待打开')
+        self.lbl_cam_status.setFont(QFont('Consolas', 10))
+        layout.addWidget(self.lbl_cam_status)
+
+        # 摄像头实例 + 定时器
+        self._cap = None
+        self._camera_id = 0
+        self._open_camera(0)
+
+        self._timer = QTimer()
+        self._timer.timeout.connect(self._update_frame)
+        self._timer.start(33)  # ~30 fps
+
+    def _open_camera(self, cam_id: int):
+        """打开指定摄像头"""
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+        if cv2 is None:
+            self.video_label.setText('OpenCV 未安装\n无法打开摄像头预览')
+            self.lbl_cam_status.setText('状态: OpenCV 不可用')
+            return
+        try:
+            self._cap = cv2.VideoCapture(cam_id, cv2.CAP_V4L2)
+            if not self._cap.isOpened():
+                self._cap = cv2.VideoCapture(cam_id)
+            if self._cap.isOpened():
+                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                self.lbl_cam_status.setText(f'状态: 摄像头 {cam_id} 已打开 (640x480)')
+            else:
+                self.video_label.setText(f'无法打开摄像头 {cam_id}\n请检查连接和权限')
+                self.lbl_cam_status.setText(f'状态: 摄像头 {cam_id} 打开失败')
+        except Exception as e:
+            self.video_label.setText(f'摄像头错误: {e}')
+            self.lbl_cam_status.setText('状态: 出错')
+
+    def _switch_camera(self, index: int):
+        self._camera_id = index
+        self._open_camera(index)
+
+    def _update_frame(self):
+        if self._cap is None or not self._cap.isOpened():
+            return
+        try:
+            ret, frame = self._cap.read()
+            if not ret or frame is None:
+                return
+
+            h, w = frame.shape[:2]
+            cv2.putText(frame, f'Camera {self._camera_id} | {w}x{h}', (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+            # BGR → RGB → QImage
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            bytes_per_line = rgb.strides[0]
+            qt_img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+
+            # 按比例缩放至 label 大小
+            scaled = qt_img.scaled(
+                self.video_label.width(), self.video_label.height(),
+                Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
+            self.video_label.setPixmap(QPixmap.fromImage(scaled))
+        except Exception:
+            pass
+
+    def closeEvent(self, event):
+        self._timer.stop()
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+        super().closeEvent(event)
 
 
 def main(args=None):

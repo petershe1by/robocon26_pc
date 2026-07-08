@@ -3,11 +3,22 @@
 
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import TimerAction
+from launch.actions import TimerAction, ExecuteProcess
+from launch.substitutions import EnvironmentVariable
+import os
 
 
 def generate_launch_description():
+    # 录包: 记录所有话题到带时间戳的目录
+    bag_dir = os.path.join(
+        os.path.expanduser('~'),
+        'ros2_ws',
+        'bags',
+        'robocon_' + os.popen('date +%Y%m%d_%H%M%S').read().strip()
+    )
+
     return LaunchDescription([
+        # === 任务调度器 ===
         # 任务调度器（必须先启动，提供 /start_mission 服务）
         Node(package='robocom_task_scheduler', executable='task_scheduler_node',
              name='task_scheduler', output='screen'),
@@ -45,4 +56,12 @@ def generate_launch_description():
         # UI 界面（如果启动文件已包含 UI，autostart.py 中则不再重复拉起）
         Node(package='robocom_ui', executable='robocom_ui',
              name='robocom_ui', output='screen'),
+
+        # === 录包（任务 12）===
+        ExecuteProcess(
+            cmd=['ros2', 'bag', 'record', '-a',
+                 '-o', bag_dir],
+            name='rosbag_record',
+            output='screen',
+        ),
     ])

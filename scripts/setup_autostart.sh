@@ -13,16 +13,17 @@ sudo bash -c "cat > $SERVICE_FILE" <<EOF
 [Unit]
 Description=ROBOCON Upper Computer Autostart
 After=network.target
-After=dev-ttyACM0.device
 
 [Service]
 Type=simple
-User=\${SUDO_USER:-$(whoami)}
+User=${SUDO_USER:-$(whoami)}
 Environment="ROS_DOMAIN_ID=0"
 Environment="RMW_IMPLEMENTATION=rmw_fastrtps_cpp"
 ExecStart=/usr/bin/python3 ${SCRIPT_PATH}
 Restart=on-failure
 RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

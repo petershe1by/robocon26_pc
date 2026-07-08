@@ -28,7 +28,7 @@ class NavigationNode(Node):
         self._x = 0.0; self._y = 0.0; self._yaw = 0.0; self._velocity = 0.0
         self._enabled = True; self._mission_status = "IDLE"
         self._current_block_target = 0; self._blocks_delivered = 0
-        self._blocks_data = {}; self._high_zone_id = -1; self._high_zone_known = False
+        self._blocks_data = {}; self._high_zone_id = -1; self._high_zone_known = False; self._exchange_try_count = 0
         self._block_targets = list(range(8)); self._mission_phase = "nav_to_block"
 
         cg = MutuallyExclusiveCallbackGroup()
@@ -37,7 +37,8 @@ class NavigationNode(Node):
         self.create_subscription(MathResult, "/math_result", self._math_result_cb, 10)
         self.create_subscription(String, "/match_start", self._on_match_start, 10)
         self.create_subscription(Bool, "/enable_motion", self._enable_cb, 10)
-        self.create_subscription(Bool, "/grasp_complete", self._grasp_complete_cb, 10)
+        self.create_subscription(Bool, "/grasp_verified", self._grasp_verified_cb, 10)
+        self.create_subscription(String, "/exchange_mismatch", self._exchange_mismatch_cb, 10)
         self.create_subscription(Bool, "/place_complete", self._place_complete_cb, 10)
 
         self.pub_cmd = self.create_publisher(MotionCmd, "/motion_cmd", 10)
@@ -45,7 +46,9 @@ class NavigationNode(Node):
         self.pub_mission = self.create_publisher(MissionStatus, "/mission_status", 10)
         self.pub_estop = self.create_publisher(Bool, "/estop", 10)
         self.pub_yolo_start = self.create_publisher(String, "/yolo_start", 10)
+        self.pub_yolo_stop = self.create_publisher(String, "/yolo_stop", 10)
         self.pub_vision_start = self.create_publisher(String, "/color_vision_start", 10)
+        self.pub_vision_stop = self.create_publisher(String, "/color_vision_stop", 10)
 
         self.create_timer(0.1, self._control_loop, callback_group=cg)
         self.create_timer(1.0, self._publish_mission_status)
@@ -68,15 +71,35 @@ class NavigationNode(Node):
     def _enable_cb(self, msg):
         self._enabled = msg.data
 
-    def _grasp_complete_cb(self, msg):
-        if msg.data and self._mission_phase == "grasp":
-            self._mission_phase = "nav_to_exchange"
-            # 吸盘已吸住, 机械臂回到待机位
-            arm = ArmCommand(); arm.state = 0; arm.command_valid = True
-            self.pub_arm.publish(arm)
+    def _grasp_verified_cb(self, msg):
+        if not msg.data or self._mission_phase != "grasp_wait_verify":
+            return
+        self.get_logger().info("深度验证通过，开始前往兑换站")
+        self._mission_phase = "nav_to_exchange"
+        self._mission_status = "NAVIGATING"
+        self._exchange_try_count = 0
+        # 停止 YOLO 视觉
+        self.pub_yolo_stop.publish(String(data="done"))
+        # 吸盘已吸住, 机械臂回到待机位
+        arm = ArmCommand(); arm.state = 0; arm.command_valid = True
+        self.pub_arm.publish(arm)
+
+    def _exchange_mismatch_cb(self, msg):
+        """兑换区颜色不匹配，尝试下一个兑换站"""
+        self._exchange_try_count += 1
+        if self._exchange_try_count >= 4:
+            self.get_logger().error("所有兑换站都不匹配，任务出错")
+            self._mission_status = "ERROR"
+            return
+        next_id = (self._current_block_target + self._exchange_try_count) % 4
+        self.get_logger().info(f"兑换区颜色不匹配，尝试下一个: station {next_id}")
+        self._mission_phase = "nav_to_exchange"
+        self._mission_status = "NAVIGATING"
 
     def _place_complete_cb(self, msg):
         if msg.data and self._mission_phase == "place":
+            # 停止颜色视觉
+            self.pub_vision_stop.publish(String(data="done"))
             self._blocks_delivered += 1
             if self._blocks_delivered >= 8:
                 self._mission_status = "COMPLETED"
@@ -139,7 +162,7 @@ class NavigationNode(Node):
                 return (*blocks[self._current_block_target], "block")
         elif self._mission_phase == "nav_to_exchange":
             stations = self.coord.get_exchange_coordinates()
-            eid = self._current_block_target % 4
+            eid = (self._current_block_target + self._exchange_try_count) % 4
             if eid < len(stations):
                 return (*stations[eid], "exchange")
         return None
@@ -180,14 +203,15 @@ class NavigationNode(Node):
     def _handle_arrival(self, tx: float, ty: float, phase: str):
         self._publish_stop_cmd()
         if phase == "block":
-            self._mission_phase = "grasp"; self._mission_status = "GRASPING"
+            self._mission_phase = "grasp_wait_verify"; self._mission_status = "GRASPING"
             self.pub_yolo_start.publish(String(data=f"block_{self._current_block_target}"))
             arm = ArmCommand(); arm.state = 1; arm.command_valid = True
             arm.suction_on = False  # 先视觉识别, 不吸
             self.pub_arm.publish(arm)
         elif phase == "exchange":
             self._mission_phase = "place"; self._mission_status = "PLACING"
-            self.pub_vision_start.publish(String(data=f"exchange_{self._current_block_target % 4}"))
+            target_exchange = (self._current_block_target + self._exchange_try_count) % 4
+            self.pub_vision_start.publish(String(data=f"exchange_{target_exchange}"))
             arm = ArmCommand(); arm.state = 4; arm.command_valid = True
             arm.suction_on = False  # 到站释放物块
             self.pub_arm.publish(arm)

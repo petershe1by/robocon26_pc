@@ -48,6 +48,7 @@ class TaskSchedulerNode(Node):
         self.pub_start = self.create_publisher(String, '/match_start', 10)
         self.pub_enable = self.create_publisher(Bool, '/enable_motion', 10)
         self.pub_estop = self.create_publisher(Bool, '/estop', 10)
+        self.pub_result = self.create_publisher(MathResult, '/math_result', 10)
 
         # ---------- 订阅 ----------
         self.create_subscription(MathResult, '/math_result', self._math_result_cb, 10)

@@ -64,21 +64,38 @@ class MathSolverNode(Node):
 
     def _solve_and_publish(self):
         start_time = time.time()
+        def _make_failure(elapsed):
+            msg = MathResult()
+            msg.success = False
+            msg.high_zone_id = -1
+            msg.expression = ''
+            msg.result = 0
+            msg.elapsed_time = Duration(sec=int(elapsed), nanosec=int((elapsed % 1) * 1e9))
+            return msg
+
         result_msg = MathResult()
         result_msg.success = False
         result_msg.high_zone_id = -1
         try:
             img = self._capture_image()
             if img is None:
+                self.pub_result.publish(_make_failure(time.time() - start_time))
+                self.get_logger().error("拍照失败")
                 return
             raw_text = self._ocr_extract(img)
             if not raw_text:
+                self.pub_result.publish(_make_failure(time.time() - start_time))
+                self.get_logger().error("OCR 识别失败")
                 return
             expression = self._sanitize_expression(raw_text)
             if not expression:
+                self.pub_result.publish(_make_failure(time.time() - start_time))
+                self.get_logger().error("正则清洗后表达式为空")
                 return
             result = self._safe_calc(expression)
             if result is None:
+                self.pub_result.publish(_make_failure(time.time() - start_time))
+                self.get_logger().error("计算失败")
                 return
 
             high_zone = int(result) % 4

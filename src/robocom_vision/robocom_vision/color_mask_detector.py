@@ -58,15 +58,27 @@ class ColorMaskDetector(Node):
         # ---------- 发布/订阅 ----------
         self.pub_place = self.create_publisher(Bool, '/place_complete', 10)
         self.pub_exchange_id = self.create_publisher(String, '/detected_exchange_id', 10)
+        self.pub_mismatch = self.create_publisher(String, '/exchange_mismatch', 10)
 
         self.create_subscription(String, '/color_vision_start', self._start_cb, 10)
+        self.create_subscription(String, '/color_vision_stop', self._stop_cb, 10)
 
         # ---------- 状态 ----------
         self._running = False
         self._target_exchange_id = 0
         self._timer = None
+        self._check_count = 0
+        self._max_checks = 30  # 最多检查 30 帧 (~3 秒) 仍不匹配则宣布失败
 
         self.get_logger().info('ColorMaskDetector 已启动')
+
+    def _stop_cb(self, msg: String):
+        """外部停止颜色识别"""
+        self._running = False
+        if self._timer:
+            self.destroy_timer(self._timer)
+            self._timer = None
+        self.get_logger().info('颜色识别已停止')
 
     # ------------------------------------------------------------------
     def _start_cb(self, msg: String):
@@ -83,6 +95,7 @@ class ColorMaskDetector(Node):
             )
 
         self._running = True
+        self._check_count = 0
         if self._timer is None:
             self._timer = self.create_timer(0.1, self._detect_loop)
 
@@ -90,6 +103,20 @@ class ColorMaskDetector(Node):
     def _detect_loop(self):
         """检测循环：识别兑换区颜色"""
         if not self._running:
+            return
+
+        self._check_count += 1
+        # 如果连续多帧都不匹配，发布 mismatch
+        if self._check_count > self._max_checks:
+            self.get_logger().warn(
+                f'颜色 {EXCHANGE_ID_COLOR.get(self._target_exchange_id, "?")} '
+                f'不匹配 ({self._check_count} 帧)'
+            )
+            self.pub_mismatch.publish(String(data=f'{self._target_exchange_id}'))
+            self._running = False
+            if self._timer:
+                self.destroy_timer(self._timer)
+                self._timer = None
             return
 
         if cv2 is None:
