@@ -22,6 +22,7 @@ Thumbs.db
 
 # Models (large files - download separately)
 src/robocom_vision/models/*.pt
+!src/robocom_vision/models/best.pt
 src/robocom_vision/models/*.onnx
 !src/robocom_vision/models/.gitkeep
 

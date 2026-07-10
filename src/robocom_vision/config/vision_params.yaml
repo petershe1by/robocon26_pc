@@ -1,8 +1,8 @@
 /yolo_block_detector:
   ros__parameters:
-    model_path: "src/robocom_vision/models/block_detector.pt"
-    confidence_threshold: 0.5
-    camera_id: 0
+    model_path: "src/robocom_vision/models/best.pt"
+    confidence_threshold: 0.05
+    camera_id: 2
 
 /color_mask_detector:
   ros__parameters:
