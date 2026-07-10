@@ -37,14 +37,14 @@ except ImportError:
 
 # 物资箱 ID → 类型 / 归位区颜色映射
 BLOCK_TYPE_MAP = {
-    0: ('food', 'green'),
-    1: ('tool', 'gray'),
-    2: ('instrument', 'blue'),
-    3: ('medicine', 'red'),
-    4: ('food', 'green'),
-    5: ('tool', 'gray'),
-    6: ('instrument', 'blue'),
-    7: ('medicine', 'red'),
+    0: ('food', 'red'),
+    1: ('tool', 'blue'),
+    2: ('instrument', 'green'),
+    3: ('medicine', 'grey'),
+    4: ('food', 'red'),
+    5: ('tool', 'blue'),
+    6: ('instrument', 'green'),
+    7: ('medicine', 'grey'),
 }
 
 

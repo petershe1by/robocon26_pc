@@ -39,10 +39,10 @@ COLOR_RANGE2 = {
 }
 
 EXCHANGE_ID_COLOR = {
-    0: 'green',
-    1: 'gray',
-    2: 'blue',
-    3: 'red',
+    0: 'red',
+    1: 'blue',
+    2: 'green',
+    3: 'grey',
 }
 
 
