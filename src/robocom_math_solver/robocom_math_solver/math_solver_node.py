@@ -10,6 +10,7 @@ from rclpy.executors import MultiThreadedExecutor
 from builtin_interfaces.msg import Duration
 from robocom_interfaces.msg import MathResult
 from std_msgs.msg import String
+import numpy as np
 
 try:
     from sympy import sympify, SympifyError
@@ -35,6 +36,7 @@ class MathSolverNode(Node):
         self.camera_id = self.get_parameter("camera_id").value
         self.img_w = self.get_parameter("image_width").value
         self.img_h = self.get_parameter("image_height").value
+        self._capture_retries = 3
         self.tts_enabled = self.get_parameter("tts_enabled").value
 
         self._ocr = None
@@ -118,18 +120,32 @@ class MathSolverNode(Node):
 
     def _capture_image(self):
         if cv2 is None:
-            import numpy as np
             return np.zeros((self.img_h, self.img_w, 3), dtype=np.uint8)
-        cap = cv2.VideoCapture(self.camera_id, cv2.CAP_V4L2)
-        if not cap.isOpened():
-            return None
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.img_w)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.img_h)
-        for _ in range(5):
-            cap.read()
-        ret, frame = cap.read()
-        cap.release()
-        return frame if ret else None
+        for attempt in range(self._capture_retries):
+            cap = cv2.VideoCapture(self.camera_id, cv2.CAP_V4L2)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(self.camera_id)
+            if not cap.isOpened():
+                continue
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.img_w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.img_h)
+            # 丢弃前几帧让相机自动曝光稳定
+            for _ in range(10):
+                cap.read()
+            ret, frame = cap.read()
+            cap.release()
+            if ret and frame is not None:
+                # 图像预处理：转灰度 + 对比度增强 + 二值化
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                # CLAHE 自适应直方图均衡（处理光照不均）
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                enhanced = clahe.apply(gray)
+                # 自适应阈值二值化（处理不同亮度背景）
+                binary = cv2.adaptiveThreshold(enhanced, 255,
+                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 6)
+                return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+        self.get_logger().error(f"拍照失败（尝试 {self._capture_retries} 次）")
+        return None
 
     def _ocr_extract(self, img):
         if self._ocr is None:
@@ -140,8 +156,21 @@ class MathSolverNode(Node):
         lines = [line[1][0] for line in result[0] if line[1] and line[1][0]]
         return " ".join(lines) if lines else None
 
-    def _sanitize_expression(self, text: str) -> str:
+    def _sanitize_expression(self, raw: str) -> str:
+        # 统一数学符号：×→*, ÷→/, −(U+2212)→-, 全角数字→半角
+        text = raw.replace('×', '*').replace('÷', '/')
+        text = text.replace('−', '-').replace('－', '-')
+        text = text.replace('＋', '+').replace('＝', '=')
+        # 全角数字/字母转半角
+        full_to_half = str.maketrans(
+            '０１２３４５６７８９．',
+            '0123456789.'
+        )
+        text = text.translate(full_to_half)
+        # 只保留数字、基本运算符和括号
         cleaned = re.sub(r"[^0-9+\-*/()]", "", text)
+        # 去掉末尾的等号或多余字符
+        cleaned = cleaned.strip('*=')
         return cleaned.strip()
 
     def _safe_calc(self, expression: str) -> float | None:
