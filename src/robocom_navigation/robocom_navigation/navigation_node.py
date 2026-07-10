@@ -26,7 +26,7 @@ class NavigationNode(Node):
         self._pos_tol = self.get_parameter("position_tolerance").value
 
         self._x = 0.0; self._y = 0.0; self._yaw = 0.0; self._velocity = 0.0
-        self._enabled = True; self._mission_status = "IDLE"
+        self._enabled = False; self._mission_status = "IDLE"
         self._current_block_target = 0; self._blocks_delivered = 0
         self._blocks_data = {}; self._high_zone_id = -1; self._high_zone_known = False; self._exchange_try_count = 0
         self._block_targets = list(range(8)); self._mission_phase = "nav_to_block"
@@ -178,7 +178,8 @@ class NavigationNode(Node):
         avoid = self._check_obstacles(tx, ty, exclude_block_id=exclude_block_id)
         cmd.angular_z = max(-1.0, min(1.0, yaw_diff / math.pi))
         cmd.linear_x = 0.0 if abs(yaw_diff) > 0.3 else max(-1.0, min(1.0, dist / 2000.0))
-        cmd.linear_y = max(-1.0, min(1.0, avoid[0])) if avoid else 0.0
+        # 8DOF: 无横移能力, linear_y 置零; 避障通过调整航向实现
+        cmd.linear_y = 0.0
         cmd.gait_mode = 1; cmd.enable = True
         return cmd
 

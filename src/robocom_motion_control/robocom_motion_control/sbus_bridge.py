@@ -67,7 +67,7 @@ class SBUSBridge:
         self._channels[7] = SWITCH_LOW
         self._channels[8] = SWITCH_LOW
         self._channels[9] = SWITCH_LOW
-        self._enabled = True
+        self._enabled = False
 
     def connect(self) -> bool:
         if self._serial and self._serial.is_open:
@@ -100,26 +100,20 @@ class SBUSBridge:
                 self._channels[ch] = max(SBUS_MIN, min(SBUS_MAX, value))
 
     def set_joystick(self, ch: int, value: float):
-        sbus_ch_map = {0: 3, 1: 2, 2: 0, 3: 1}
+        # 8DOF mapping: joystick[0]=angular_z→CH1(ch[0]), joystick[1]=linear_x→CH2(ch[1])
+        sbus_ch_map = {0: 0, 1: 1}
         if ch in sbus_ch_map:
             self.set_channel(sbus_ch_map[ch], float_to_sbus(value))
 
-    def set_switch(self, switch_id: int, position: int):
-        sbus_ch_map = {0: 9, 1: 4, 2: 8, 3: 7}
-        if switch_id not in sbus_ch_map:
-            return
-        val = {0: SWITCH_LOW, 1: SWITCH_MID}.get(position, SWITCH_HIGH)
-        self.set_channel(sbus_ch_map[switch_id], val)
-
     def enable(self):
         self._enabled = True
-        self.set_switch(0, 1)
 
     def disable(self):
         self._enabled = False
-        self.set_switch(0, 0)
-        for ch in range(4):
+        for ch in range(2):
             self.set_joystick(ch, 0.0)
+        # CH5 = LOW = stop (清故障+安全)
+        self._channels[4] = SWITCH_LOW
 
     def send_frame(self) -> bool:
         if not self._serial or not self._serial.is_open:

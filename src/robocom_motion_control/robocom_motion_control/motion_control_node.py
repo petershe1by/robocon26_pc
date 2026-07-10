@@ -7,18 +7,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from robocom_interfaces.msg import MotionCmd
-from std_msgs.msg import Bool, Int8
-from .sbus_bridge import SBUSBridge
-
-
-# 机械臂状态 → SBUS ch[5] 值映射
-ARM_SBUS_MAP = {
-    0: 352,    # HOME
-    1: 688,    # VISION_SCAN
-    2: 1024,   # VISION_AID
-    3: 1359,   # GRASP
-    4: 1695,   # PLACE
-}
+from std_msgs.msg import Bool
+from .sbus_bridge import SBUSBridge, SWITCH_LOW, SWITCH_MID, SWITCH_HIGH
 
 
 class MotionControlNode(Node):
@@ -42,13 +32,11 @@ class MotionControlNode(Node):
             self.get_logger().error("USB CDC 连接失败")
 
         self._last_cmd_time = time.time()
-        self._enabled = True
+        self._enabled = False
 
         self.create_subscription(MotionCmd, "/motion_cmd", self._motion_cmd_cb, 10)
         self.create_subscription(Bool, "/enable_motion", self._enable_cb, 10)
         self.create_subscription(Bool, "/estop", self._estop_cb, 10)
-        # 机械臂状态 → SBUS ch[5]
-        self.create_subscription(Int8, "/arm_current_state", self._arm_state_cb, 10)
 
         self.pub_enabled = self.create_publisher(Bool, "/motion_enabled", 10)
         self.create_timer(1.0, self._watchdog_check)
@@ -59,45 +47,55 @@ class MotionControlNode(Node):
             return
         self._last_cmd_time = time.time()
         if msg.estop:
-            self._bridge.disable()
+            self._bridge.set_channel(8, SWITCH_HIGH)  # CH9 = 安全瞬时触发
+            self._bridge.set_channel(4, SWITCH_LOW)   # CH5 = LOW = 停止
             return
         if not msg.enable:
-            self._bridge.disable()
+            self._bridge.set_channel(4, SWITCH_LOW)   # CH5 = LOW = 停止
+            self._bridge.set_joystick(0, 0.0)
+            self._bridge.set_joystick(1, 0.0)
             return
 
-        gait_cfg = {0: (1, 0), 1: (1, 1), 2: (1, 2)}
-        if msg.gait_mode in gait_cfg:
-            self._bridge.set_switch(*gait_cfg[msg.gait_mode])
+        # CH3 = 速度档（基于 gait_mode）
+        speed_map = {0: SWITCH_LOW, 1: SWITCH_MID, 2: SWITCH_HIGH}
+        self._bridge.set_channel(2, speed_map.get(msg.gait_mode, SWITCH_MID))
 
+        # CH1 = angular_z, CH2 = linear_x（8DOF 无横移）
         self._bridge.set_joystick(0, msg.angular_z)
         self._bridge.set_joystick(1, msg.linear_x)
-        self._bridge.set_joystick(2, msg.linear_y)
-        self._bridge.enable()
 
-    def _arm_state_cb(self, msg: Int8):
-        """机械臂状态 → SBUS ch[5], 让 STM32 知道当前机械臂在做什么"""
-        sbus_val = ARM_SBUS_MAP.get(msg.data, 1024)
-        self._bridge.set_channel(5, sbus_val)
+        # CH5 主模式：有运动→HIGH(步态), 静止→MID(站立)
+        has_motion = abs(msg.angular_z) > 0.01 or abs(msg.linear_x) > 0.01
+        if has_motion:
+            self._bridge.set_channel(4, SWITCH_HIGH)
+        else:
+            self._bridge.set_channel(4, SWITCH_MID)
+
 
     def _enable_cb(self, msg: Bool):
         self._enabled = msg.data
         if msg.data:
-            self._bridge.enable()
+            self._bridge.set_channel(4, SWITCH_MID)  # CH5 = MID = 站立待命
         else:
-            self._bridge.disable()
+            self._bridge.set_channel(4, SWITCH_LOW)   # CH5 = LOW = 停止
+            self._bridge.set_joystick(0, 0.0)
+            self._bridge.set_joystick(1, 0.0)
         self.pub_enabled.publish(msg)
 
     def _estop_cb(self, msg: Bool):
         if msg.data:
-            self._bridge.disable()
+            self._bridge.set_channel(8, SWITCH_HIGH)  # CH9 = 安全瞬时触发
+            self._bridge.set_channel(4, SWITCH_LOW)   # CH5 = LOW = 停止
 
     def _watchdog_check(self):
         if not self._enabled:
             return
-        if time.time() - self._last_cmd_time > self._watchdog_timeout:
-            for ch in range(4):
-                self._bridge.set_joystick(ch, 0.0)
-            self.get_logger().warn(f"看门狗: 无指令")
+        elapsed = time.time() - self._last_cmd_time
+        if elapsed > self._watchdog_timeout:
+            self._bridge.set_joystick(0, 0.0)
+            self._bridge.set_joystick(1, 0.0)
+            self._bridge.set_channel(4, SWITCH_MID)  # CH5 = MID = 站立保持
+            self.get_logger().warn(f"看门狗: 无指令 ({elapsed:.0f}s)")
 
     def destroy_node(self):
         self._bridge.stop_loop()
