@@ -20,8 +20,15 @@ except ImportError:
 
 try:
     import cv2
+    import numpy as np
 except ImportError:
     cv2 = None
+    np = None
+
+try:
+    import pyrealsense2 as rs
+except ImportError:
+    rs = None
 
 
 class MathSolverNode(Node):
@@ -121,31 +128,34 @@ class MathSolverNode(Node):
     def _capture_image(self):
         if cv2 is None:
             return np.zeros((self.img_h, self.img_w, 3), dtype=np.uint8)
-        for attempt in range(self._capture_retries):
-            cap = cv2.VideoCapture(self.camera_id, cv2.CAP_V4L2)
-            if not cap.isOpened():
-                cap = cv2.VideoCapture(self.camera_id)
-            if not cap.isOpened():
-                continue
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.img_w)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.img_h)
-            # 丢弃前几帧让相机自动曝光稳定
+        if rs is None:
+            self.get_logger().error("pyrealsense2 未安装")
+            return None
+        try:
+            pipeline = rs.pipeline()
+            cfg = rs.config()
+            cfg.enable_stream(rs.stream.color, self.img_w, self.img_h, rs.format.bgr8, 30)
+            pipeline.start(cfg)
+            # 等待帧稳定
             for _ in range(10):
-                cap.read()
-            ret, frame = cap.read()
-            cap.release()
-            if ret and frame is not None:
-                # 图像预处理：转灰度 + 对比度增强 + 二值化
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                # CLAHE 自适应直方图均衡（处理光照不均）
-                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                enhanced = clahe.apply(gray)
-                # 自适应阈值二值化（处理不同亮度背景）
-                binary = cv2.adaptiveThreshold(enhanced, 255,
-                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 6)
-                return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
-        self.get_logger().error(f"拍照失败（尝试 {self._capture_retries} 次）")
-        return None
+                pipeline.wait_for_frames(timeout_ms=5000)
+            frames = pipeline.wait_for_frames(timeout_ms=5000)
+            color_frame = frames.get_color_frame()
+            if not color_frame:
+                pipeline.stop()
+                return None
+            frame = np.asanyarray(color_frame.get_data())
+            pipeline.stop()
+            # 图像预处理：CLAHE + 自适应二值化
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(gray)
+            binary = cv2.adaptiveThreshold(enhanced, 255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 6)
+            return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+        except Exception as e:
+            self.get_logger().error(f"拍照失败: {e}")
+            return None
 
     def _ocr_extract(self, img):
         if self._ocr is None:

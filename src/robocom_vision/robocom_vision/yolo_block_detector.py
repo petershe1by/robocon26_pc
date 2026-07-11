@@ -29,6 +29,11 @@ except ImportError:
     cv2 = None
     np = None
 
+try:
+    import pyrealsense2 as rs
+except ImportError:
+    rs = None
+
 
 # ===== 以下参数来自 con_good_v1.py，请勿修改 =====
 CLASS_NAMES = ['blue', 'green', 'grey', 'red']
@@ -113,6 +118,7 @@ class YOLOBlockDetector(Node):
         self._target_block = None
         self._grasped = False
         self._timer = None
+        self._pipeline = None
 
         self.get_logger().info('YOLOBlockDetector 已启动，等待启动信号...')
 
@@ -123,6 +129,20 @@ class YOLOBlockDetector(Node):
         if msg.data.startswith('block_'):
             self._target_block = int(msg.data.split('_')[1])
             self.get_logger().info(f'启动 YOLO 检测，目标物资箱: {self._target_block}')
+        # 打开 D435 管道
+        if rs is not None and self._pipeline is None:
+            try:
+                self._pipeline = rs.pipeline()
+                cfg = rs.config()
+                cfg.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+                self._pipeline.start(cfg)
+                # 丢弃前几帧让自动曝光稳定
+                for _ in range(10):
+                    self._pipeline.wait_for_frames(timeout_ms=5000)
+                self.get_logger().info('D435 管道已启动 (640x480)')
+            except Exception as e:
+                self.get_logger().error(f'D435 管道启动失败: {e}')
+                self._pipeline = None
         self._running = True
         self._grasped = False
         if self._timer is None:
@@ -131,10 +151,19 @@ class YOLOBlockDetector(Node):
     # ------------------------------------------------------------------
     def _stop_cb(self, msg: String):
         self._running = False
+        self._close_pipeline()
         if self._timer:
             self.destroy_timer(self._timer)
             self._timer = None
         self.get_logger().info('YOLO 检测已停止')
+
+    def _close_pipeline(self):
+        if self._pipeline is not None:
+            try:
+                self._pipeline.stop()
+            except Exception:
+                pass
+            self._pipeline = None
 
     # ------------------------------------------------------------------
     def _detect_loop(self):
@@ -148,15 +177,20 @@ class YOLOBlockDetector(Node):
             self.pub_grasp.publish(Bool(data=True))
             self._grasped = True
             self._running = False
+            self._close_pipeline()
             return
 
-        # 1. 捕获图像
-        cap = cv2.VideoCapture(self._cam_id)
-        if not cap.isOpened():
+        # 1. 捕获 D435 彩色帧
+        if self._pipeline is None:
             return
-        ret, frame = cap.read()
-        cap.release()
-        if not ret or frame is None:
+        try:
+            frames = self._pipeline.wait_for_frames(timeout_ms=5000)
+            color_frame = frames.get_color_frame()
+            if not color_frame:
+                return
+            frame = np.asanyarray(color_frame.get_data())
+        except Exception as e:
+            self.get_logger().warn(f'D435 取帧失败: {e}')
             return
 
         # 2. YOLO 推理（conf=0.05，同 con_good_v1.py）
@@ -232,6 +266,7 @@ class YOLOBlockDetector(Node):
             self.pub_grasp.publish(Bool(data=True))
             self._grasped = True
             self._running = False
+            self._close_pipeline()
             if self._timer:
                 self.destroy_timer(self._timer)
                 self._timer = None

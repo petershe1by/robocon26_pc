@@ -36,6 +36,7 @@ class LocalizationNode(Node):
         self._velocity = 0.0
         self._odom_received = False
         self._match_start_time = 0.0
+        self._no_odom_warn_count = 0
 
         odom_topic = self.get_parameter("odom_topic").value
         self.create_subscription(Odometry, odom_topic, self._odom_cb, 10)
@@ -70,16 +71,21 @@ class LocalizationNode(Node):
         self._odom_received = True
 
     def _on_match_start(self, msg: String):
-        if not self._odom_received:
-            self.get_logger().warn("未收到里程计数据，无法重置原点")
-            return
-        self.coord.reset_radar_origin(self._x, self._y, self._yaw)
+        if self._odom_received:
+            self.coord.reset_radar_origin(self._x, self._y, self._yaw)
+            self.get_logger().info(f"雷达原点已重置, yaw={self._yaw:.2f}")
+        else:
+            self.coord.reset_radar_origin(0.0, 0.0, 0.0)
+            self.get_logger().warn("未收到里程计，原点设为 (0,0,0) — 开发模式")
         self._match_start_time = time.time()
-        self.get_logger().info(f"雷达原点已重置, yaw={self._yaw:.2f}")
 
     def _publish_state(self):
         if not self._odom_received:
-            return
+            self._no_odom_warn_count += 1
+            if self._no_odom_warn_count % 250 == 0:
+                self.get_logger().warn(
+                    "等待里程计... 确认雷达驱动已启动并发布 /odom"
+                )
         msg = RobotState()
         msg.x = self._x
         msg.y = self._y
