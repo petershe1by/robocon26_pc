@@ -7,6 +7,7 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from robocom_interfaces.msg import MotionCmd
 from std_msgs.msg import Bool
+from std_msgs.msg import Float32MultiArray
 from .virtual_remote import (
     VirtualRemoteOutput,
     MODE_STAND_HOLD, MODE_GAIT_ONLY, MODE_IDLE,
@@ -38,6 +39,7 @@ class MotionControlNode(Node):
         self.create_subscription(MotionCmd, "/motion_cmd", self._motion_cmd_cb, 10)
         self.create_subscription(Bool, "/enable_motion", self._enable_cb, 10)
         self.create_subscription(Bool, "/estop", self._estop_cb, 10)
+        self.create_subscription(Float32MultiArray, "/imu_orientation", self._imu_cb, 10)
 
         self.pub_enabled = self.create_publisher(Bool, "/motion_enabled", 10)
         self.create_timer(1.0, self._watchdog_check)
@@ -77,13 +79,21 @@ class MotionControlNode(Node):
             self._vremote.set_mode(1, 0)   # MID+LOW = 站立待命
             self._vremote.refresh_autonomy_permit()
         else:
-            self._vremote.send_safety_zero()
-            self._vremote = VirtualRemoteOutput()  # 强制新 session
+            self._vremote.emergency_stop()   # 清 DEADMAN + 零帧
+            self._vremote.set_mode(0, 0)     # LOW+LOW = 完全待机
         self.pub_enabled.publish(msg)
 
     def _estop_cb(self, msg: Bool):
         if msg.data:
             self._vremote.emergency_stop()
+
+    def _imu_cb(self, msg: Float32MultiArray):
+        """接收 IMU 处理后姿态 → 通过 0x11 帧发往下位机"""
+        if len(msg.data) >= 6:
+            self._vremote.set_imu_orientation(
+                msg.data[0], msg.data[1], msg.data[2],   # roll, pitch, yaw
+                msg.data[3], msg.data[4], msg.data[5]    # gyro x/y/z
+            )
 
     def _watchdog_check(self):
         if not self._enabled:

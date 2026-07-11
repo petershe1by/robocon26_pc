@@ -1,10 +1,14 @@
 ﻿#!/usr/bin/env python3
 """
 virtual_remote.py — USB 虚拟遥控器 0x10 协议
+                    IMU 姿态数据 0x11 协议
 
 实现 USB虚拟遥控器.md 定义的 VIRTUAL_RC_SETPOINT 协议：
   40 字节帧，A5 5A 01 10 头部，28 字节 payload，CRC-16/CCITT-FALSE
   九宫格模式 (main_switch*3+sub_switch)，DEADMAN/MOTION_ENABLE/SMOOTH_STOP 标志
+
+同时扩展 IMU_ORIENTATION 0x11 协议，发送处理后的 IMU 姿态：
+  float32[6] (roll, pitch, yaw, gyro_x, gyro_y, gyro_z) + uint32 timestamp
 """
 
 import struct, time, threading, os
@@ -16,8 +20,14 @@ assert struct.calcsize(VIRTUAL_RC_FORMAT) == 28
 
 MAGIC      = b"\xA5\x5A"
 MSG_TYPE   = b"\x01\x10"
+IMU_MSG_TYPE = b"\x01\x11"
 FRAME_LEN  = 40
 PAYLOAD_LEN = 28
+
+IMU_FRAME_LEN = 40
+IMU_PAYLOAD_LEN = 28
+IMU_FORMAT = "<6fI"
+assert struct.calcsize(IMU_FORMAT) == 28
 
 # command_flags 位定义
 DEADMAN_HELD   = 1 << 0
@@ -83,6 +93,9 @@ class VirtualRemoteOutput:
         self._arm_j0 = 0
         self._arm_j1 = 0
         self._host_start = 0
+        # — IMU 数据 —
+        self._imu_data = [0.0]*6   # roll, pitch, yaw, gx, gy, gz
+        self._imu_updated = False
 
     # ------------------------------------------------------------------
     def connect(self) -> bool:
@@ -166,9 +179,19 @@ class VirtualRemoteOutput:
         with self._lock:
             old_flags = self._flags
             self._flags = SMOOTH_STOP if (old_flags & MOTION_ENABLE) else 0
-        self._send_now()
+        self._write_frame(self._build_frame())
         with self._lock:
             self._flags = old_flags
+
+    # ------------------------------------------------------------------
+    # IMU 姿态接口
+    # ------------------------------------------------------------------
+    def set_imu_orientation(self, roll_deg: float, pitch_deg: float, yaw_deg: float,
+                             gyro_x: float, gyro_y: float, gyro_z: float):
+        """设置 IMU 处理后的欧拉角 (度) 和角速度 (rad/s)"""
+        with self._lock:
+            self._imu_data = [roll_deg, pitch_deg, yaw_deg, gyro_x, gyro_y, gyro_z]
+            self._imu_updated = True
 
     # ------------------------------------------------------------------
     def _build_frame(self) -> bytes:
@@ -197,9 +220,24 @@ class VirtualRemoteOutput:
         self._frame_seq += 1
         return pre_crc + struct.pack("<H", crc)
 
-    def _send_now(self):
-        """立即发送一帧"""
-        frame = self._build_frame()
+    def _build_imu_frame(self) -> bytes | None:
+        """构建 0x11 IMU 姿态帧。若无新数据返回 None"""
+        with self._lock:
+            if not self._imu_updated:
+                return None
+            data = list(self._imu_data)
+        payload = struct.pack(IMU_FORMAT,
+            data[0], data[1], data[2],   # roll, pitch, yaw
+            data[3], data[4], data[5],   # gyro x/y/z
+            int(time.time() * 1000) & 0xFFFFFFFF)
+        header = MAGIC + IMU_MSG_TYPE
+        wrapper = struct.pack("<HH", self._frame_seq, IMU_PAYLOAD_LEN)
+        pre_crc = header + b"\x00\x00" + wrapper + payload
+        crc = _crc16_ccitt(pre_crc)
+        self._frame_seq += 1
+        return pre_crc + struct.pack("<H", crc)
+
+    def _write_frame(self, frame: bytes):
         if self._serial and self._serial.is_open:
             try:
                 self._serial.write(frame)
@@ -210,10 +248,19 @@ class VirtualRemoteOutput:
         if self._running:
             return
         self._running = True
+        self._tick = 0
         interval = 1.0 / freq
         def _loop():
             while self._running:
-                self._send_now()
+                # 0x10 控制帧：每 tick 都发
+                ctrl = self._build_frame()
+                self._write_frame(ctrl)
+                # 0x11 IMU 帧：每 2 个 tick 发一次（25Hz）
+                if self._tick % 2 == 0:
+                    imu = self._build_imu_frame()
+                    if imu:
+                        self._write_frame(imu)
+                self._tick += 1
                 time.sleep(interval)
         threading.Thread(target=_loop, daemon=True).start()
 

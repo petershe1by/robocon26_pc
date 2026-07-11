@@ -20,6 +20,7 @@ setup(
     entry_points={
         'console_scripts': [
             'localization_node = robocom_localization.localization_node:main',
+            'imu_filter = robocom_localization.imu_filter:main',
         ],
     },
 )
