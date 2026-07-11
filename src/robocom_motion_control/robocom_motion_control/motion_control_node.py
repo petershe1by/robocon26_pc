@@ -1,35 +1,36 @@
 ﻿#!/usr/bin/env python3
-"""motion_control_node.py - 运动控制 + SBUS 通信"""
+"""motion_control_node.py — 运动控制 + USB 虚拟遥控器"""
 
 import time
-import threading
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from robocom_interfaces.msg import MotionCmd
 from std_msgs.msg import Bool
-from .sbus_bridge import SBUSBridge, SWITCH_LOW, SWITCH_MID, SWITCH_HIGH
+from .virtual_remote import (
+    VirtualRemoteOutput,
+    MODE_STAND_HOLD, MODE_GAIT_ONLY, MODE_IDLE,
+    MODE_STAND_ARM, MODE_STAND_WHEEL,
+    SPEED_LOW, SPEED_MID, SPEED_HIGH,
+    DEADMAN_HELD, MOTION_ENABLE, SMOOTH_STOP,
+)
 
 
 class MotionControlNode(Node):
     def __init__(self):
         super().__init__("motion_control_node")
         self.declare_parameter("serial_port", "auto")
-        self.declare_parameter("serial_baud", 100000)
-        self.declare_parameter("sbus_freq", 100.0)
         self.declare_parameter("motion_watchdog_sec", 5.0)
 
         port = self.get_parameter("serial_port").value
-        baud = self.get_parameter("serial_baud").value
-        freq = self.get_parameter("sbus_freq").value
         self._watchdog_timeout = self.get_parameter("motion_watchdog_sec").value
 
-        self._bridge = SBUSBridge(port=port, baud=baud)
-        if self._bridge.connect():
-            self.get_logger().info(f"USB CDC 已连接: {self._bridge.port}")
-            self._bridge.start_loop(freq)
+        self._vremote = VirtualRemoteOutput(port=port)
+        if self._vremote.connect():
+            self.get_logger().info(f"USB 虚拟遥控器已连接: {self._vremote.port}")
+            self._vremote.start_loop(50.0)
         else:
-            self.get_logger().error("USB CDC 连接失败")
+            self.get_logger().error("USB 虚拟遥控器连接失败")
 
         self._last_cmd_time = time.time()
         self._enabled = False
@@ -46,60 +47,55 @@ class MotionControlNode(Node):
         if not self._enabled:
             return
         self._last_cmd_time = time.time()
+
         if msg.estop:
-            self._bridge.set_channel(8, SWITCH_HIGH)  # CH9 = 安全瞬时触发
-            self._bridge.set_channel(4, SWITCH_LOW)   # CH5 = LOW = 停止
+            self._vremote.emergency_stop()
             return
         if not msg.enable:
-            self._bridge.set_channel(4, SWITCH_LOW)   # CH5 = LOW = 停止
-            self._bridge.set_joystick(0, 0.0)
-            self._bridge.set_joystick(1, 0.0)
+            self._vremote.send_safety_zero()
             return
 
-        # CH3 = 速度档（基于 gait_mode）
-        speed_map = {0: SWITCH_LOW, 1: SWITCH_MID, 2: SWITCH_HIGH}
-        self._bridge.set_channel(2, speed_map.get(msg.gait_mode, SWITCH_MID))
+        # 速度档: gait_mode → speed_permille
+        speed_map = {0: SPEED_LOW, 1: SPEED_MID, 2: SPEED_HIGH}
+        self._vremote.set_speed_axis(speed_map.get(msg.gait_mode, SPEED_MID) / 1000.0)
 
-        # CH1 = angular_z, CH2 = linear_x（8DOF 无横移）
-        self._bridge.set_joystick(0, msg.angular_z)
-        self._bridge.set_joystick(1, msg.linear_x)
+        # 运动: angular_z(转向), linear_x(前进/后退)
+        self._vremote.set_motion(msg.linear_x, msg.angular_z)
 
-        # CH5 主模式：有运动→HIGH(步态), 静止→MID(站立)
+        # 九宫格模式: 有运动→HIGH+LOW(步态), 静止→MID+LOW(站立)
         has_motion = abs(msg.angular_z) > 0.01 or abs(msg.linear_x) > 0.01
         if has_motion:
-            self._bridge.set_channel(4, SWITCH_HIGH)
+            self._vremote.set_mode(2, 0)   # HIGH+LOW → 纯步态
         else:
-            self._bridge.set_channel(4, SWITCH_MID)
+            self._vremote.set_mode(1, 0)   # MID+LOW → 站立
 
+        self._vremote.refresh_autonomy_permit()
 
     def _enable_cb(self, msg: Bool):
         self._enabled = msg.data
         if msg.data:
-            self._bridge.set_channel(4, SWITCH_MID)  # CH5 = MID = 站立待命
+            self._vremote.set_mode(1, 0)   # MID+LOW = 站立待命
+            self._vremote.refresh_autonomy_permit()
         else:
-            self._bridge.set_channel(4, SWITCH_LOW)   # CH5 = LOW = 停止
-            self._bridge.set_joystick(0, 0.0)
-            self._bridge.set_joystick(1, 0.0)
+            self._vremote.send_safety_zero()
+            self._vremote = VirtualRemoteOutput()  # 强制新 session
         self.pub_enabled.publish(msg)
 
     def _estop_cb(self, msg: Bool):
         if msg.data:
-            self._bridge.set_channel(8, SWITCH_HIGH)  # CH9 = 安全瞬时触发
-            self._bridge.set_channel(4, SWITCH_LOW)   # CH5 = LOW = 停止
+            self._vremote.emergency_stop()
 
     def _watchdog_check(self):
         if not self._enabled:
             return
         elapsed = time.time() - self._last_cmd_time
         if elapsed > self._watchdog_timeout:
-            self._bridge.set_joystick(0, 0.0)
-            self._bridge.set_joystick(1, 0.0)
-            self._bridge.set_channel(4, SWITCH_MID)  # CH5 = MID = 站立保持
+            self._vremote.smooth_stop()
             self.get_logger().warn(f"看门狗: 无指令 ({elapsed:.0f}s)")
 
     def destroy_node(self):
-        self._bridge.stop_loop()
-        self._bridge.disconnect()
+        self._vremote.stop_loop()
+        self._vremote.disconnect()
         super().destroy_node()
 
 
