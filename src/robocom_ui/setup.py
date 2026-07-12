@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'robocom_ui = robocom_ui.ui_main:main',
+            'debug_ui = robocom_ui.debug_ui:main',
         ],
     },
 )
