@@ -326,7 +326,7 @@ class DebugWindow(QMainWindow):
     def _arm_jog(self, axis, val):
         getattr(self, f"_lbl_{axis}").setText(f"{val}")
         self._node.send_motion(
-            angular_z=val / 3000.0,
+            yaw=val / 3000.0,
             gait=self._gait, enable=True
         )
 
