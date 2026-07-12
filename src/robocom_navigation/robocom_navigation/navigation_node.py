@@ -66,7 +66,7 @@ class NavigationNode(Node):
         if msg.success:
             self._high_zone_id = msg.high_zone_id; self._high_zone_known = True
         # 数学题完成/超时 → 解锁导航
-        if self._mission_status == "MATH_SOLVING":
+        if self._mission_status in ("MATH_SOLVING", "IDLE"):
             self._mission_status = "NAVIGATING"
             self.get_logger().info("数学题阶段结束, 开始导航")
 

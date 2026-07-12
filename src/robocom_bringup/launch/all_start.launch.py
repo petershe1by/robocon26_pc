@@ -3,8 +3,8 @@
 
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import TimerAction, ExecuteProcess
-from launch.substitutions import EnvironmentVariable
+from launch.actions import TimerAction, ExecuteProcess, IncludeLaunchDescription
+from launch.launch_description_sources import AnyLaunchDescriptionSource
 import os
 
 
@@ -18,6 +18,23 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        # === 雷达驱动 (Livox Mid-360) ===
+        IncludeLaunchDescription(
+            AnyLaunchDescriptionSource(
+                os.path.join(os.path.expanduser('~'), 'livox_ros_driver2',
+                             'launch_ROS2', 'msg_MID360_launch.py')
+            ),
+        ),
+
+        # IMU 滤波
+        Node(package='robocom_localization', executable='imu_filter',
+             name='imu_filter', output='screen'),
+
+        # EKF 融合定位 (IMU + 雷达里程计)
+        Node(package='robot_localization', executable='ekf_node',
+             name='ekf_filter_node', output='screen',
+             parameters=['src/robocom_localization/config/ekf.yaml']),
+
         # === 任务调度器 ===
         # 任务调度器（必须先启动，提供 /start_mission 服务）
         Node(package='robocom_task_scheduler', executable='task_scheduler_node',
@@ -26,7 +43,7 @@ def generate_launch_description():
         # 定位
         Node(package='robocom_localization', executable='localization_node',
              name='localization', output='screen',
-             parameters=[{'odom_topic': '/odom'}]),
+             parameters=[{'odom_topic': '/odometry/filtered'}]),
 
         # 运动控制 + USB CDC
         Node(package='robocom_motion_control', executable='motion_control_node',

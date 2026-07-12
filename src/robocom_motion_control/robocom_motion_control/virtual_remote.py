@@ -73,7 +73,7 @@ def _float_to_permille(value: float) -> int:
 class VirtualRemoteOutput:
     """USB 虚拟遥控器输出接口（唯一写入点）"""
 
-    def __init__(self, port: str = "auto", timeout: float = 0.05):
+    def __init__(self, port: str = "auto", timeout: float = 0.05, tx_callback=None):
         self.port = port
         self.timeout = timeout
         self._serial = None
@@ -93,6 +93,7 @@ class VirtualRemoteOutput:
         self._arm_j0 = 0
         self._arm_j1 = 0
         self._host_start = 0
+        self._tx_callback = tx_callback
         # — IMU 数据 —
         self._imu_data = [0.0]*6   # roll, pitch, yaw, gx, gy, gz
         self._imu_updated = False
@@ -238,6 +239,8 @@ class VirtualRemoteOutput:
         return pre_crc + struct.pack("<H", crc)
 
     def _write_frame(self, frame: bytes):
+        if self._tx_callback:
+            self._tx_callback(frame)
         if self._serial and self._serial.is_open:
             try:
                 self._serial.write(frame)

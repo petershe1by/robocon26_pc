@@ -41,7 +41,8 @@ class TaskSchedulerNode(Node):
         self._match_started = False
         self._match_start_time = 0.0
         self._math_solved = False
-        self._math_timeout = 20.0
+        self.declare_parameter('math_timeout', 30.0)
+        self._math_timeout = self.get_parameter('math_timeout').value
         self._mission_complete = False
 
         # ---------- 发布 ----------

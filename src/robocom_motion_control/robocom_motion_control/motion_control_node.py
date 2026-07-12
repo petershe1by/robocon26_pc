@@ -6,7 +6,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from robocom_interfaces.msg import MotionCmd
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from std_msgs.msg import Float32MultiArray
 from .virtual_remote import (
     VirtualRemoteOutput,
@@ -26,7 +26,8 @@ class MotionControlNode(Node):
         port = self.get_parameter("serial_port").value
         self._watchdog_timeout = self.get_parameter("motion_watchdog_sec").value
 
-        self._vremote = VirtualRemoteOutput(port=port)
+        self._pub_tx = self.create_publisher(String, '/usb_tx_frame', 10)
+        self._vremote = VirtualRemoteOutput(port=port, tx_callback=self._on_tx_cb)
         if self._vremote.connect():
             self.get_logger().info(f"USB 虚拟遥控器已连接: {self._vremote.port}")
             self._vremote.start_loop(50.0)
@@ -102,6 +103,11 @@ class MotionControlNode(Node):
         if elapsed > self._watchdog_timeout:
             self._vremote.smooth_stop()
             self.get_logger().warn(f"看门狗: 无指令 ({elapsed:.0f}s)")
+
+        def _on_tx_cb(self, frame: bytes):
+        msg = String()
+        msg.data = frame.hex()
+        self._pub_tx.publish(msg)
 
     def destroy_node(self):
         self._vremote.stop_loop()
