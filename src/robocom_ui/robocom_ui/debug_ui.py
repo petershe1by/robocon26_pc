@@ -46,7 +46,7 @@ class VirtualJoystick(QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
-        p.setRenderHint(p.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
         cx, cy, r = self._cx, self._cy, self._r
 
         # 外圆
