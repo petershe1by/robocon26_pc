@@ -6,13 +6,13 @@ try:
     import cv2
     import numpy as np
 except ImportError:
+    cv2 = None
+    np = None
+
 try:
     import pyrealsense2 as rs
 except ImportError:
     rs = None
-
-    cv2 = None
-    np = None
 
 import rclpy
 from rclpy.node import Node
