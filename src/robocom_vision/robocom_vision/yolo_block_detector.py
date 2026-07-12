@@ -36,43 +36,7 @@ except ImportError:
 
 
 # ===== 以下参数来自 con_good_v1.py，请勿修改 =====
-CLASS_NAMES = ['blue', 'green', 'grey', 'red']
-
-COLOR_THRESHOLDS = {
-    'red':    [([0, 80, 80], [10, 255, 255]), ([160, 80, 80], [180, 255, 255])],
-    'green':  [([30, 50, 50], [90, 255, 255])],
-    'blue':   [([90, 50, 50], [140, 255, 255])],
-    'grey':   [([0, 0, 100], [180, 12, 150])]
-}
-# ==================================================
-
-
-def get_dominant_color(roi_img):
-    """返回 roi 区域的主色名称，无主色则返回 None"""
-    hsv_roi = cv2.cvtColor(roi_img, cv2.COLOR_BGR2HSV)
-    total_pixels = roi_img.shape[0] * roi_img.shape[1]
-    color_pixel_counts = {}
-
-    for color_name, ranges in COLOR_THRESHOLDS.items():
-        mask = np.zeros(hsv_roi.shape[:2], dtype=np.uint8)
-        for lower, upper in ranges:
-            lower_np = np.array(lower, dtype=np.uint8)
-            upper_np = np.array(upper, dtype=np.uint8)
-            mask = cv2.bitwise_or(mask, cv2.inRange(hsv_roi, lower_np, upper_np))
-
-        kernel = np.ones((3, 3), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        color_ratio = cv2.countNonZero(mask) / total_pixels
-        color_pixel_counts[color_name] = color_ratio
-
-    if not color_pixel_counts:
-        return None
-    dominant = max(color_pixel_counts, key=color_pixel_counts.get)
-    threshold = 0.50 if dominant == 'grey' else 0.15
-    if color_pixel_counts[dominant] < threshold:
-        return None
-    return dominant
-
+# YOLO 仅用于视觉对准，物块类型由预分配颜色决定
 
 class YOLOBlockDetector(Node):
     """YOLO + 颜色融合物资箱检测节点"""
@@ -218,43 +182,20 @@ class YOLOBlockDetector(Node):
                 if roi.size == 0:
                     continue
 
-                # 颜色融合（同 con_good_v1.py）
-                opencv_color = get_dominant_color(roi)
-                yolo_class = CLASS_NAMES[cls_idx]
-                final_class = yolo_class
-
-                if opencv_color is not None:
-                    if yolo_class != opencv_color:
-                        final_class = opencv_color if conf < 0.20 else yolo_class
-
                 max_conf = conf
                 best_target = {
                     'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
                     'cx': (x1 + x2) // 2, 'cy': (y1 + y2) // 2,
-                    'cls_idx': cls_idx,
-                    'final_class': final_class,
                     'conf': conf
                 }
 
         # 4. 判断最优目标是否在视野中心
         if best_target and (best_target['x1'] <= center_x <= best_target['x2']
                             and best_target['y1'] <= center_y <= best_target['y2']):
-            t = best_target
-            # 将 final_class 转成对应的类索引
-            try:
-                final_idx = CLASS_NAMES.index(t['final_class'])
-            except ValueError:
-                final_idx = t['cls_idx']
-
             self.get_logger().info(
-                f'视野中心在物块内 → class={t["final_class"]}(idx={final_idx}), '
-                f'conf={t["conf"]:.2f}'
+                f'视野中心在物块内, '
+                f'conf={best_target["conf"]:.2f}'
             )
-
-            # 发布物块类型（导航用此决定兑换站）
-            type_msg = String()
-            type_msg.data = f'{final_idx}'
-            self.pub_block_type.publish(type_msg)
 
             # 发送机械臂进入抓取状态
             arm_cmd = ArmCommand()

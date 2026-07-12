@@ -50,6 +50,7 @@ class UINode(Node):
         self.create_subscription(RobotState, '/robot_state', self._robot_cb, 10)
         self.create_subscription(MathResult, '/math_result', self._math_cb, 10)
         self.create_subscription(MissionStatus, '/mission_status', self._mission_cb, 10)
+        self._pub_block_colors = self.create_publisher(String, '/block_color_assignments', 10)
         self._start_client = self.create_client(StartMission, '/start_mission')
         self._set_coord_client = self.create_client(SetCoordinate, '/set_coordinate')
         while not self._start_client.wait_for_service(timeout_sec=1.0):
@@ -74,6 +75,13 @@ class UINode(Node):
         self.mission_status = msg.status
         self.blocks_delivered = msg.blocks_delivered
         self.blocks_remaining = msg.blocks_remaining
+
+        def publish_block_colors(self, colors: list):
+        """发布 8 个物块的颜色分配"""
+        msg = String()
+        import json
+        msg.data = json.dumps(colors)
+        self._pub_block_colors.publish(msg)
 
     def start_mission(self):
         req = StartMission.Request()
@@ -233,6 +241,30 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(g_calib)
 
+        # === 物块颜色分配 ===
+        self._colors_file = os.path.join(os.path.expanduser('~'), '.robocom_block_colors.json')
+        g_color = QGroupBox('物块颜色分配（比赛公布后设置）')
+        gl = QGridLayout(g_color)
+        gl.setSpacing(6)
+        color_opts = ['red', 'blue', 'grey', 'green']
+        color_labels = {'red': '红色', 'blue': '蓝色', 'grey': '灰色', 'green': '绿色'}
+        self._color_combos = []
+        for i in range(8):
+            lbl = QLabel(f'箱子{i}')
+            combo = QComboBox()
+            for cname in color_opts:
+                combo.addItem(color_labels[cname], cname)
+            self._color_combos.append(combo)
+            row, col = i // 2, (i % 2) * 2
+            gl.addWidget(lbl, row, col)
+            gl.addWidget(combo, row, col + 1)
+        btn_apply_color = QPushButton('应用颜色配置')
+        btn_apply_color.setStyleSheet("QPushButton { background-color: #e67e22; color: white; border-radius: 6px; padding: 8px; font-weight: bold; }")
+        btn_apply_color.clicked.connect(self._on_apply_colors)
+        gl.addWidget(btn_apply_color, 4, 0, 1, 4)
+        layout.addWidget(g_color)
+        self._load_block_colors()
+
         # 进程监控
         g_log = QGroupBox('运行进程')
         l_log = QVBoxLayout(g_log)
@@ -267,6 +299,28 @@ class MainWindow(QMainWindow):
         """打开摄像头预览对话框"""
         dlg = CameraPreviewDialog(self)
         dlg.exec()
+
+    def _on_apply_colors(self):
+        colors = [cb.currentData() for cb in self._color_combos]
+        data = {f'block_{i}': colors[i] for i in range(8)}
+        try:
+            with open(self._colors_file, 'w') as f:
+                json.dump(data, f, indent=2)
+        except: pass
+        self._node.publish_block_colors(colors)
+        self.lbl_status.setText('✓ 物块颜色已发布')
+
+    def _load_block_colors(self):
+        if not os.path.exists(self._colors_file): return
+        try:
+            with open(self._colors_file) as f:
+                data = json.load(f)
+            for i in range(8):
+                color = data.get(f'block_{i}')
+                if color:
+                    idx = self._color_combos[i].findData(color)
+                    if idx >= 0: self._color_combos[i].setCurrentIndex(idx)
+        except: pass
 
     def _on_apply_coord(self, name: str, spin_x: QDoubleSpinBox, spin_y: QDoubleSpinBox):
         """应用坐标到 /set_coordinate 服务"""

@@ -29,7 +29,7 @@ class NavigationNode(Node):
         self._enabled = False; self._mission_status = "IDLE"
         self._current_block_target = 0; self._blocks_delivered = 0
         self._blocks_data = {}; self._high_zone_id = -1; self._high_zone_known = False; self._exchange_try_count = 0
-        self._detected_exchange_id = 0
+        
         self._block_targets = list(range(8)); self._mission_phase = "nav_to_block"
 
         cg = MutuallyExclusiveCallbackGroup()
@@ -39,8 +39,9 @@ class NavigationNode(Node):
         self.create_subscription(String, "/match_start", self._on_match_start, 10)
         self.create_subscription(Bool, "/enable_motion", self._enable_cb, 10)
         self.create_subscription(Bool, "/grasp_verified", self._grasp_verified_cb, 10)
-        self.create_subscription(String, "/detected_block_type", self._detected_type_cb, 10)
+        
         self.create_subscription(String, "/exchange_mismatch", self._exchange_mismatch_cb, 10)
+        self.create_subscription(String, "/block_color_assignments", self._block_color_cb, 10)
         self.create_subscription(Bool, "/place_complete", self._place_complete_cb, 10)
 
         self.pub_cmd = self.create_publisher(MotionCmd, "/motion_cmd", 10)
@@ -86,14 +87,13 @@ class NavigationNode(Node):
         arm = ArmCommand(); arm.state = 0; arm.command_valid = True
         self.pub_arm.publish(arm)
 
-    def _detected_type_cb(self, msg):
-        """YOLO 检测到的物块类型 → 决定去哪个兑换站"""
+    def _block_color_cb(self, msg):
+        import json
         try:
-            cls_id = int(msg.data)
-            if 0 <= cls_id <= 3:
-                self._detected_exchange_id = cls_id
-                self.get_logger().info(f"YOLO 检测物块类型 {cls_id}, → 兑换站 {cls_id}")
-        except ValueError:
+            colors = json.loads(msg.data)
+            if len(colors) >= 8:
+                self.coord.set_block_colors(colors)
+        except Exception:
             pass
 
     def _exchange_mismatch_cb(self, msg):
@@ -103,7 +103,7 @@ class NavigationNode(Node):
             self.get_logger().error("所有兑换站都不匹配，任务出错")
             self._mission_status = "ERROR"
             return
-        next_id = (self._detected_exchange_id + self._exchange_try_count) % 4
+        next_id = (self.coord.get_exchange_id_for_block(self._current_block_target) + self._exchange_try_count) % 4
         self.get_logger().info(f"兑换区颜色不匹配，尝试下一个: station {next_id}")
         self._mission_phase = "nav_to_exchange"
         self._mission_status = "NAVIGATING"
@@ -174,7 +174,7 @@ class NavigationNode(Node):
                 return (*blocks[self._current_block_target], "block")
         elif self._mission_phase == "nav_to_exchange":
             stations = self.coord.get_exchange_coordinates()
-            eid = (self._detected_exchange_id + self._exchange_try_count) % 4
+            eid = (self.coord.get_exchange_id_for_block(self._current_block_target) + self._exchange_try_count) % 4
             if eid < len(stations):
                 return (*stations[eid], "exchange")
         return None
@@ -223,7 +223,7 @@ class NavigationNode(Node):
             self.pub_arm.publish(arm)
         elif phase == "exchange":
             self._mission_phase = "place"; self._mission_status = "PLACING"
-            target_exchange = (self._detected_exchange_id + self._exchange_try_count) % 4
+            target_exchange = (self.coord.get_exchange_id_for_block(self._current_block_target) + self._exchange_try_count) % 4
             self.pub_vision_start.publish(String(data=f"exchange_{target_exchange}"))
             arm = ArmCommand(); arm.state = 4; arm.command_valid = True
             arm.suction_on = False  # 到站释放物块

@@ -104,7 +104,7 @@ class MotionControlNode(Node):
             self._vremote.smooth_stop()
             self.get_logger().warn(f"看门狗: 无指令 ({elapsed:.0f}s)")
 
-        def _on_tx_cb(self, frame: bytes):
+    def _on_tx_cb(self, frame: bytes):
         msg = String()
         msg.data = frame.hex()
         self._pub_tx.publish(msg)

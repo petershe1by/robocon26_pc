@@ -40,8 +40,34 @@ class CoordinateManager:
         self.radar_origin_yaw: float = 0.0
         self.radar_initialized: bool = False
 
+        # ---- 物块颜色赋值 (红/蓝/灰/绿) ----
+        self._block_colors = ['red', 'blue', 'green', 'grey',
+                              'red', 'blue', 'green', 'grey']
+
         self._initialized = True
 
+    def set_block_colors(self, colors: list):
+        """设置 8 个物块的盘面颜色"""
+        if len(colors) >= 8:
+            self._block_colors = list(colors[:8])
+
+    def get_block_color(self, block_id: int) -> str:
+        """获取指定物块的盘面颜色"""
+        if 0 <= block_id < 8:
+            return self._block_colors[block_id]
+        return 'red'
+
+    def get_block_colors(self) -> list:
+        """获取全部 8 个物块颜色"""
+        return list(self._block_colors)
+
+    def get_exchange_id_for_block(self, block_id: int) -> int:
+        """根据物块盘面颜色返回目标兑换站 ID"""
+        mapping = {'blue': 0, 'green': 1, 'grey': 2, 'red': 3}
+        return mapping.get(self.get_block_color(block_id), 0)
+
+    # ------------------------------------------------------------------
+    # 物资箱坐标（8个，相对 x0/y0）
     # ------------------------------------------------------------------
     # 物资箱坐标（8个，相对 x0/y0）
     # ------------------------------------------------------------------
