@@ -6,6 +6,11 @@ try:
     import cv2
     import numpy as np
 except ImportError:
+try:
+    import pyrealsense2 as rs
+except ImportError:
+    rs = None
+
     cv2 = None
     np = None
 
@@ -334,7 +339,7 @@ class MainWindow(QMainWindow):
 
 
 class CameraPreviewDialog(QDialog):
-    """摄像头实时预览对话框"""
+    """摄像头实时预览对话框（支持 D435 pyrealsense2 + USB cv2）"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('摄像头实时预览')
@@ -347,17 +352,15 @@ class CameraPreviewDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # 摄像头选择栏
         top_bar = QHBoxLayout()
         top_bar.addWidget(QLabel('选择摄像头:'))
         self.cam_combo = QComboBox()
-        self.cam_combo.addItems(['摄像头 0', '摄像头 1', '摄像头 2', '摄像头 3'])
+        self.cam_combo.addItems(['D435 (RealSense) [默认]', 'USB 0', 'USB 1', 'USB 2', 'USB 3'])
         self.cam_combo.currentIndexChanged.connect(self._switch_camera)
         top_bar.addWidget(self.cam_combo)
         top_bar.addStretch()
         layout.addLayout(top_bar)
 
-        # 视频显示区域
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumSize(640, 480)
@@ -365,28 +368,51 @@ class CameraPreviewDialog(QDialog):
         self.video_label.setText('正在打开摄像头...')
         layout.addWidget(self.video_label)
 
-        # 状态栏
         self.lbl_cam_status = QLabel('状态: 等待打开')
         self.lbl_cam_status.setFont(QFont('Consolas', 10))
         layout.addWidget(self.lbl_cam_status)
 
-        # 摄像头实例 + 定时器
         self._cap = None
-        self._camera_id = 0
-        self._open_camera(0)
+        self._pipeline = None
+        self._using_rs = False
 
+        self._open_d435()
         self._timer = QTimer()
         self._timer.timeout.connect(self._update_frame)
-        self._timer.start(33)  # ~30 fps
+        self._timer.start(33)
 
-    def _open_camera(self, cam_id: int):
-        """打开指定摄像头"""
-        if self._cap is not None:
+    def _close_camera(self):
+        if self._pipeline:
+            try: self._pipeline.stop()
+            except: pass
+            self._pipeline = None
+        if self._cap:
             self._cap.release()
             self._cap = None
+        self._using_rs = False
+
+    def _open_d435(self):
+        self._close_camera()
+        if rs is None:
+            self.video_label.setText('pyrealsense2 未安装\n无法打开 D435')
+            self.lbl_cam_status.setText('状态: pyrealsense2 不可用')
+            return
+        try:
+            self._pipeline = rs.pipeline()
+            cfg = rs.config()
+            cfg.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+            self._pipeline.start(cfg)
+            self._using_rs = True
+            self.lbl_cam_status.setText('状态: D435 (RealSense) 640x480')
+        except Exception as e:
+            self._close_camera()
+            self.video_label.setText(f'D435 打开失败: {e}')
+            self.lbl_cam_status.setText('状态: D435 连接失败')
+
+    def _open_usb(self, cam_id):
+        self._close_camera()
         if cv2 is None:
-            self.video_label.setText('OpenCV 未安装\n无法打开摄像头预览')
-            self.lbl_cam_status.setText('状态: OpenCV 不可用')
+            self.video_label.setText('OpenCV 未安装')
             return
         try:
             self._cap = cv2.VideoCapture(cam_id, cv2.CAP_V4L2)
@@ -395,51 +421,42 @@ class CameraPreviewDialog(QDialog):
             if self._cap.isOpened():
                 self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
                 self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                self.lbl_cam_status.setText(f'状态: 摄像头 {cam_id} 已打开 (640x480)')
+                self.lbl_cam_status.setText(f'状态: USB {cam_id} 640x480')
             else:
-                self.video_label.setText(f'无法打开摄像头 {cam_id}\n请检查连接和权限')
-                self.lbl_cam_status.setText(f'状态: 摄像头 {cam_id} 打开失败')
+                self.video_label.setText(f'无法打开 USB {cam_id}')
         except Exception as e:
             self.video_label.setText(f'摄像头错误: {e}')
-            self.lbl_cam_status.setText('状态: 出错')
 
-    def _switch_camera(self, index: int):
-        self._camera_id = index
-        self._open_camera(index)
+    def _switch_camera(self, index):
+        if index == 0:
+            self._open_d435()
+        else:
+            self._open_usb(index - 1)
 
     def _update_frame(self):
-        if self._cap is None or not self._cap.isOpened():
-            return
         try:
-            ret, frame = self._cap.read()
-            if not ret or frame is None:
-                return
-
+            if self._using_rs and self._pipeline:
+                frames = self._pipeline.wait_for_frames(timeout_ms=5000)
+                c = frames.get_color_frame()
+                if not c: return
+                frame = np.asanyarray(c.get_data())
+            elif self._cap and self._cap.isOpened():
+                ret, frame = self._cap.read()
+                if not ret or frame is None: return
+            else: return
             h, w = frame.shape[:2]
-            cv2.putText(frame, f'Camera {self._camera_id} | {w}x{h}', (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-            # BGR → RGB → QImage
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            bytes_per_line = rgb.strides[0]
-            qt_img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
-
-            # 按比例缩放至 label 大小
-            scaled = qt_img.scaled(
-                self.video_label.width(), self.video_label.height(),
-                Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
-            self.video_label.setPixmap(QPixmap.fromImage(scaled))
+            qi = QImage(rgb.data, w, rgb.strides[0], QImage.Format_RGB888)
+            s = qi.scaled(self.video_label.width(), self.video_label.height(),
+                          Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.video_label.setPixmap(QPixmap.fromImage(s))
         except Exception:
             pass
 
     def closeEvent(self, event):
         self._timer.stop()
-        if self._cap is not None:
-            self._cap.release()
-            self._cap = None
+        self._close_camera()
         super().closeEvent(event)
-
 
 def main(args=None):
     rclpy.init(args=args)
