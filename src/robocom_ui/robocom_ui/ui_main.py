@@ -51,6 +51,7 @@ class UINode(Node):
         self.create_subscription(MathResult, '/math_result', self._math_cb, 10)
         self.create_subscription(MissionStatus, '/mission_status', self._mission_cb, 10)
         self._pub_block_colors = self.create_publisher(String, '/block_color_assignments', 10)
+        self._pub_pre_solve = self.create_publisher(String, '/pre_solve_math', 10)
         self._start_client = self.create_client(StartMission, '/start_mission')
         self._set_coord_client = self.create_client(SetCoordinate, '/set_coordinate')
         while not self._start_client.wait_for_service(timeout_sec=1.0):
@@ -76,7 +77,11 @@ class UINode(Node):
         self.blocks_delivered = msg.blocks_delivered
         self.blocks_remaining = msg.blocks_remaining
 
-        def publish_block_colors(self, colors: list):
+        def trigger_pre_solve(self):
+        self._pub_pre_solve.publish(String(data="trigger"))
+        self.get_logger().info("已触发预解数学题")
+
+    def publish_block_colors(self, colors: list):
         """发布 8 个物块的颜色分配"""
         msg = String()
         import json
@@ -394,7 +399,7 @@ class MainWindow(QMainWindow):
 
 class CameraPreviewDialog(QDialog):
     """摄像头实时预览对话框（支持 D435 pyrealsense2 + USB cv2）"""
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, pre_solve_cb=None):
         super().__init__(parent)
         self.setWindowTitle('摄像头实时预览')
         self.setMinimumSize(720, 560)
@@ -406,7 +411,13 @@ class CameraPreviewDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
+        self._pre_solve_cb = pre_solve_cb
+        
         top_bar = QHBoxLayout()
+        self.btn_solve = QPushButton('📷 拍照计算')
+        self.btn_solve.setStyleSheet('QPushButton { background-color: #e67e22; color: white; border-radius: 4px; padding: 4px 10px; font-weight: bold; }')
+        self.btn_solve.clicked.connect(self._on_take_photo)
+        top_bar.addWidget(self.btn_solve)
         top_bar.addWidget(QLabel('选择摄像头:'))
         self.cam_combo = QComboBox()
         self.cam_combo.addItems(['D435 (RealSense) [默认]', 'USB 0', 'USB 1', 'USB 2', 'USB 3'])
@@ -480,6 +491,11 @@ class CameraPreviewDialog(QDialog):
                 self.video_label.setText(f'无法打开 USB {cam_id}')
         except Exception as e:
             self.video_label.setText(f'摄像头错误: {e}')
+
+    def _on_take_photo(self):
+        if self._pre_solve_cb:
+            self._pre_solve_cb()
+            self.lbl_cam_status.setText('已触发拍照计算，查看终端日志...')
 
     def _switch_camera(self, index):
         if index == 0:

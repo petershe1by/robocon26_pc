@@ -46,6 +46,10 @@ class MathSolverNode(Node):
         self._capture_retries = 3
         self.tts_enabled = self.get_parameter("tts_enabled").value
 
+        self._pre_solved_result = None
+        self._pre_solve_status = self.create_publisher(String, '/pre_solve_status', 10)
+        self.create_subscription(String, '/pre_solve_math', self._on_pre_solve, 10)
+
         self._ocr = None
         self._init_ocr()
 
@@ -64,66 +68,79 @@ class MathSolverNode(Node):
         except ImportError:
             self.get_logger().warn("paddleocr 未安装，使用模拟模式")
 
+    def _on_pre_solve(self, msg: String):
+        """预解数学题（点击“拍照计算”触发，结果暂不发布）"""
+        if self._solving:
+            self._pre_solve_status.publish(String(data='busy'))
+            return
+        self._pre_solve_status.publish(String(data='solving'))
+        self._solving = True
+        result = self._solve()
+        with self._solving_lock:
+            self._solving = False
+        if result and result.success:
+            self._pre_solved_result = result
+            self._pre_solve_status.publish(String(data='done'))
+            self.get_logger().info(f"预解成功: {result.expression} = {result.result}, 等待一键启动...")
+        else:
+            self._pre_solved_result = None
+            self._pre_solve_status.publish(String(data='failed'))
+            self.get_logger().error("预解失败")
+
     def _on_match_start(self, msg: String):
         if self._solving:
             return
         self.get_logger().info("=== 数学题识别启动 ===")
+        # 如果已经预解，直接发布结果
+        if self._pre_solved_result is not None:
+            self.pub_result.publish(self._pre_solved_result)
+            self._pre_solved_result = None
+            self._pre_solve_status.publish(String(data='published'))
+            self.get_logger().info("已发布预解结果")
+            return
+        # 没有预解，正常求解
         self._solving = True
         threading.Thread(target=self._solve_and_publish, daemon=True).start()
 
-    def _solve_and_publish(self):
-        start_time = time.time()
-        def _make_failure(elapsed):
+    def _solve(self):
+        """内核求解逻辑：拍照→OCR→SymPy。返回 MathResult 或 None。"""
+        start = time.time()
+        def _fail():
             msg = MathResult()
             msg.success = False
             msg.high_zone_id = -1
             msg.expression = ''
             msg.result = 0
-            msg.elapsed_time = Duration(sec=int(elapsed), nanosec=int((elapsed % 1) * 1e9))
+            msg.elapsed_time = Duration(sec=int(time.time()-start), nanosec=0)
             return msg
-
-        result_msg = MathResult()
-        result_msg.success = False
-        result_msg.high_zone_id = -1
         try:
             img = self._capture_image()
-            if img is None:
-                self.pub_result.publish(_make_failure(time.time() - start_time))
-                self.get_logger().error("拍照失败")
-                return
-            raw_text = self._ocr_extract(img)
-            if not raw_text:
-                self.pub_result.publish(_make_failure(time.time() - start_time))
-                self.get_logger().error("OCR 识别失败")
-                return
-            expression = self._sanitize_expression(raw_text)
-            if not expression:
-                self.pub_result.publish(_make_failure(time.time() - start_time))
-                self.get_logger().error("正则清洗后表达式为空")
-                return
-            result = self._safe_calc(expression)
-            if result is None:
-                self.pub_result.publish(_make_failure(time.time() - start_time))
-                self.get_logger().error("计算失败")
-                return
-
-            high_zone = int(result) % 4
-            elapsed = time.time() - start_time
-            result_msg.expression = expression
-            result_msg.result = int(result)
-            result_msg.high_zone_id = high_zone
-            result_msg.success = True
-            result_msg.elapsed_time = Duration(sec=int(elapsed), nanosec=int((elapsed % 1) * 1e9))
-
-            self.get_logger().info(f"求解成功: {expression} = {int(result)}, 高分区: {high_zone}, 用时: {elapsed:.1f}s")
+            if img is None: return _fail()
+            raw = self._ocr_extract(img)
+            if not raw: return _fail()
+            expr = self._sanitize_expression(raw)
+            if not expr: return _fail()
+            val = self._safe_calc(expr)
+            if val is None: return _fail()
+            hi = int(val) % 4
+            el = time.time() - start
+            msg = MathResult()
+            msg.expression = expr; msg.result = int(val)
+            msg.high_zone_id = hi; msg.success = True
+            msg.elapsed_time = Duration(sec=int(el), nanosec=int((el%1)*1e9))
+            self.get_logger().info(f"求解成功: {expr} = {int(val)}, 高分区: {hi}, 用时: {el:.1f}s")
             if self.tts_enabled:
-                self._tts_speak(f"第{high_zone}号兑换区为高分区域")
+                self._tts_speak(f"第{hi}号兑换区为高分区域")
+            return msg
         except Exception as e:
             self.get_logger().error(f"求解异常: {e}")
-        finally:
-            self.pub_result.publish(result_msg)
-            with self._solving_lock:
-                self._solving = False
+            return _fail()
+
+    def _solve_and_publish(self):
+        result = self._solve()
+        with self._solving_lock:
+            self._solving = False
+        self.pub_result.publish(result)
 
     def _capture_image(self):
         if cv2 is None:
