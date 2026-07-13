@@ -28,11 +28,12 @@ class MotionControlNode(Node):
 
         self._pub_tx = self.create_publisher(String, '/usb_tx_frame', 10)
         self._vremote = VirtualRemoteOutput(port=port, tx_callback=self._on_tx_cb)
-        if self._vremote.connect():
-            self.get_logger().info(f"USB 虚拟遥控器已连接: {self._vremote.port}")
-            self._vremote.start_loop(50.0)
+        connected = self._vremote.connect()
+        if connected:
+            self.get_logger().info(f"USB 已连接: {self._vremote.port}")
         else:
-            self.get_logger().error("USB 虚拟遥控器连接失败")
+            self.get_logger().warn("USB 未连接，帧仅发布到 /usb_tx_frame 监控，不走串口")
+        self._vremote.start_loop(50.0)
 
         self._last_cmd_time = time.time()
         self._enabled = False
