@@ -35,19 +35,6 @@ class DepthHelper(Node):
         self._threshold = self.get_parameter('depth_stable_threshold').value
         self._stable_frames = self.get_parameter('stable_frames').value
 
-        # ---------- RealSense 管道 ----------
-        self._pipeline = None
-        if rs is not None:
-            try:
-                self._pipeline = rs.pipeline()
-                config = rs.config()
-                config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-                self._pipeline.start(config)
-                self.get_logger().info('D435 深度流已启动')
-            except Exception as e:
-                self.get_logger().warn(f'D435 启动失败: {e}')
-                self._pipeline = None
-
         # ---------- 发布 ----------
         self.pub_verified = self.create_publisher(Bool, '/grasp_verified', 10)
 
@@ -66,10 +53,36 @@ class DepthHelper(Node):
     def _grasp_start_cb(self, msg: Bool):
         """开始吸取 → 开始监测深度"""
         if msg.data:
+            self._start_d435()
             self._grasping = True
             self._prev_depth = None
             self._stable_count = 0
             self.get_logger().info('开始深度监测（吸取验证）')
+
+    def _start_d435(self):
+        """需要时才启动 D435 深度流（不占用设备）"""
+        if self._pipeline is not None:
+            return
+        if rs is None:
+            return
+        try:
+            self._pipeline = rs.pipeline()
+            config = rs.config()
+            config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+            self._pipeline.start(config)
+            self.get_logger().info('D435 深度流已启动')
+        except Exception as e:
+            self.get_logger().warn(f'D435 启动失败: {e}')
+
+    def _stop_d435(self):
+        """释放 D435 设备"""
+        if self._pipeline is not None:
+            try:
+                self._pipeline.stop()
+            except Exception:
+                pass
+            self._pipeline = None
+            self.get_logger().info('D435 深度流已释放')
 
     # ------------------------------------------------------------------
     def _depth_check(self):
@@ -106,6 +119,7 @@ class DepthHelper(Node):
                 if self._stable_count >= self._stable_frames:
                     self.get_logger().info('✓ 深度稳定，吸取成功验证')
                     self.pub_verified.publish(Bool(data=True))
+                    self._stop_d435()
                     self._grasping = False
                     self._stable_count = 0
 
@@ -125,6 +139,7 @@ class DepthHelper(Node):
         if self._stable_count >= 5:
             self.get_logger().info('[模拟] 深度稳定，吸取成功')
             self.pub_verified.publish(Bool(data=True))
+            self._stop_d435()
             self._grasping = False
             self._stable_count = 0
 
@@ -137,8 +152,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        if node._pipeline:
-            node._pipeline.stop()
+        node._stop_d435()
         node.destroy_node()
         rclpy.shutdown()
 

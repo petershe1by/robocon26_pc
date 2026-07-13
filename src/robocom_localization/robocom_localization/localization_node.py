@@ -11,6 +11,7 @@ from robocom_interfaces.msg import RobotState, BlockInfo
 from robocom_interfaces.srv import SetCoordinate
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
+from robocom_interfaces.msg import MotionCmd
 from builtin_interfaces.msg import Duration as RosDuration
 
 from .coordinate_manager import CoordinateManager
@@ -37,9 +38,11 @@ class LocalizationNode(Node):
         self._odom_received = False
         self._match_start_time = 0.0
         self._no_odom_warn_count = 0
+        self._last_motion_time = time.time()
 
         odom_topic = self.get_parameter("odom_topic").value
         self.create_subscription(Odometry, odom_topic, self._odom_cb, 10)
+        self.create_subscription(MotionCmd, "/motion_cmd", self._motion_cmd_cb, 10)
 
         self.pub_state = self.create_publisher(RobotState, "/robot_state", 10)
         self.pub_blocks = self.create_publisher(BlockInfo, "/block_info", 10)
@@ -69,6 +72,23 @@ class LocalizationNode(Node):
         cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         self._yaw = math.atan2(siny, cosy)
         self._odom_received = True
+
+    def _motion_cmd_cb(self, msg: MotionCmd):
+        """无雷达时的简易航迹推算：从运动指令积分出坐标变化"""
+        if self._odom_received:
+            return  # 有雷达时不用推算
+        dt = time.time() - self._last_motion_time
+        self._last_motion_time = time.time()
+        if dt <= 0 or dt > 0.5:
+            return
+        MAX_SPEED = 0.5    # m/s (全摇杆速度)
+        MAX_YAW = 2.0       # rad/s (全摇杆转向)
+        speed = msg.linear_x * MAX_SPEED
+        yaw_rate = msg.angular_z * MAX_YAW
+        self._yaw += yaw_rate * dt
+        self._x += speed * math.cos(self._yaw) * dt * 1000.0
+        self._y += speed * math.sin(self._yaw) * dt * 1000.0
+        self._velocity = abs(speed)
 
     def _on_match_start(self, msg: String):
         if self._odom_received:
