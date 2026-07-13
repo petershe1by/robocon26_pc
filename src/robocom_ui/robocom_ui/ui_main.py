@@ -77,7 +77,7 @@ class UINode(Node):
         self.blocks_delivered = msg.blocks_delivered
         self.blocks_remaining = msg.blocks_remaining
 
-        def trigger_pre_solve(self):
+    def trigger_pre_solve(self):
         self._pub_pre_solve.publish(String(data="trigger"))
         self.get_logger().info("已触发预解数学题")
 
