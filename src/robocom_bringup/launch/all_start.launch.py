@@ -33,7 +33,7 @@ def generate_launch_description():
         # EKF 融合定位 (IMU + 雷达里程计)
         Node(package='robot_localization', executable='ekf_node',
              name='ekf_filter_node', output='screen',
-             parameters=['src/robocom_localization/config/ekf.yaml']),
+             parameters=[os.path.join(os.path.expanduser('~'), 'ros2_ws', 'src', 'robocom_pc', 'src', 'robocom_localization', 'config', 'ekf.yaml')]),
 
         # === 任务调度器 ===
         # 任务调度器（必须先启动，提供 /start_mission 服务）
@@ -82,3 +82,4 @@ def generate_launch_description():
             output='screen',
         ),
     ])
+
