@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-# fix_setup.bash ¡ª Source this AFTER install/setup.bash
+ï»¿#!/usr/bin/env bash
+# fix_setup.bash -- Source this AFTER install/setup.bash
 # Fixes: AMENT_PREFIX_PATH, libexec dirs, and entry point stubs
 # Usage: source install/setup.bash; source scripts/fix_setup.bash
 
@@ -24,41 +24,42 @@ for _pkg_path in "$_COLCON_WS"/install/*/; do
     source "$_pkg_path/local_setup.bash"
   fi
 
-  # Fix 2: Ensure libexec directory exists
-  if [ ! -d "$_pkg_path/lib/$_pkg" ]; then
-    mkdir -p "$_pkg_path/lib/$_pkg"
-    # Link from bin/ if available
-    if [ -d "$_pkg_path/bin" ]; then
-      for _entry in "$_pkg_path"/bin/*; do
-        [ -f "$_entry" ] || continue
-        _name="$(basename "$_entry")"
-        ln -sf "$_entry" "$_pkg_path/lib/$_pkg/$_name"
-      done
-    fi
-    # Create stubs from egg-info if libexec still empty
-    if [ -z "$(ls -A "$_pkg_path/lib/$_pkg" 2>/dev/null)" ]; then
-      for _edir in \
-        "$_COLCON_WS/src/$_pkg"/*.egg-info \
-        "$_COLCON_WS/build/$_pkg"/*.egg-info \
-        "$_pkg_path"/*.egg-info; do
-        [ -d "$_edir" ] || continue
-        [ -f "$_edir/entry_points.txt" ] || continue
-        grep "=" "$_edir/entry_points.txt" | while IFS="=" read -r _ename _emod; do
-          _ename="$(echo "$_ename" | tr -d ' ')"
-          _emod="$(echo "$_emod" | tr -d ' ')"
-          [ -n "$_ename" ] || continue
-          cat > "$_pkg_path/lib/$_pkg/$_ename" << SCRIPTEOF
+  # Fix 2: Ensure libexec directory exists and has executables
+  mkdir -p "$_pkg_path/lib/$_pkg"
+
+  # Link from bin/ if available
+  if [ -d "$_pkg_path/bin" ]; then
+    for _entry in "$_pkg_path"/bin/*; do
+      [ -f "$_entry" ] || continue
+      _name="$(basename "$_entry")"
+      ln -sf "$_entry" "$_pkg_path/lib/$_pkg/$_name"
+    done
+  fi
+
+  # Create stubs from egg-info if libexec is empty
+  if [ -z "$(ls -A "$_pkg_path/lib/$_pkg" 2>/dev/null)" ]; then
+    for _edir in \
+      "$_COLCON_WS/src/$_pkg"/*.egg-info \
+      "$_COLCON_WS/build/$_pkg"/*.egg-info \
+      "$_pkg_path"/*.egg-info; do
+      [ -d "$_edir" ] || continue
+      [ -f "$_edir/entry_points.txt" ] || continue
+      while IFS="=" read -r _ename _emod; do
+        _ename="$(echo "$_ename" | tr -d ' ')"
+        _emod="$(echo "$_emod" | tr -d ' ')"
+        [ -n "$_ename" ] || continue
+        cat > "$_pkg_path/lib/$_pkg/$_ename" << SCRIPTEOF
 #!/usr/bin/env python3
-from ${_emod%:*} import ${_emod#*:}
-import sys
-sys.exit(${_emod#*:}())
+import sys, importlib
+_mod, _func = '${_emod}'.rsplit(':', 1)
+_m = importlib.import_module(_mod)
+sys.exit(getattr(_m, _func)())
 SCRIPTEOF
-          chmod +x "$_pkg_path/lib/$_pkg/$_ename"
-          echo "[fix_setup] Stub: $_pkg/lib/$_pkg/$_ename"
-        done
-        break
-      done
-    fi
+        chmod +x "$_pkg_path/lib/$_pkg/$_ename"
+        echo "[fix_setup] Stub: $_pkg/lib/$_pkg/$_ename"
+      done < "$_edir/entry_points.txt"
+      break
+    done
     echo "[fix_setup] Ensured libexec: $_pkg/lib/$_pkg"
   fi
 done
