@@ -109,6 +109,7 @@ class DebugUINode(Node):
         self.pub_enable = self.create_publisher(Bool, "/enable_motion", 10)
         self.pub_estop = self.create_publisher(Bool, "/estop", 10)
         self._motion_enabled = False
+        self._motion_active = False  # 九宫格模式切到运动后保持 enable
         self.create_subscription(Bool, "/motion_enabled", self._cb, 10)
         self.get_logger().info("DebugUINode 已启动")
 
@@ -117,9 +118,9 @@ class DebugUINode(Node):
 
     def send_motion(self, fwd=0.0, yaw=0.0, gait=1, enable=True, estop=False):
         cmd = MotionCmd()
-        cmd.linear_x = max(-1.0, min(1.0, fwd))
+        cmd.linear_x = float(max(-1.0, min(1.0, fwd)))
         cmd.linear_y = 0.0
-        cmd.angular_z = max(-1.0, min(1.0, yaw))
+        cmd.angular_z = float(max(-1.0, min(1.0, yaw)))
         cmd.gait_mode = gait
         cmd.enable = enable
         cmd.estop = estop
@@ -288,7 +289,7 @@ class DebugWindow(QMainWindow):
 
     def _publish_stick(self):
         f, y = self._joystick_fwd, self._joystick_yaw
-        self._node.send_motion(f, y, self._gait, enable=(abs(f) > 0.01 or abs(y) > 0.01))
+        self._node.send_motion(f, y, self._gait, enable=(abs(f) > 0.01 or abs(y) > 0.01 or self._motion_active))
 
     def _refresh_ui(self):
         en = self._node._motion_enabled
@@ -308,18 +309,22 @@ class DebugWindow(QMainWindow):
             btn.setChecked(g == gm)
 
     def _mode_idle(self):
+        self._motion_active = False
         self._node.send_enable(False)
         self._node.send_motion(0, 0, self._gait, enable=False)
 
     def _mode_stand(self):
+        self._motion_active = True
         self._node.send_enable(True)
         self._node.send_motion(0, 0, self._gait, enable=True)
 
     def _mode_gait(self):
+        self._motion_active = True
         self._node.send_enable(True)
         self._node.send_motion(0.01, 0, self._gait, enable=True)
 
     def _mode_arm(self):
+        self._motion_active = True
         self._node.send_enable(True)
         self._node.send_motion(0, 0, self._gait, enable=True)
 

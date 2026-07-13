@@ -98,9 +98,16 @@ class MathSolverNode(Node):
             self._pre_solve_status.publish(String(data='published'))
             self.get_logger().info("已发布预解结果")
             return
-        # 没有预解，正常求解
-        self._solving = True
-        threading.Thread(target=self._solve_and_publish, daemon=True).start()
+        # 没有预解 → 默认返回高分区 3
+        self.get_logger().warn("未预解数学题，默认返回高分区 3")
+        msg = MathResult()
+        msg.success = True
+        msg.high_zone_id = 3
+        msg.expression = ''
+        msg.result = 0
+        msg.elapsed_time = Duration(sec=0, nanosec=0)
+        self.pub_result.publish(msg)
+        self._pre_solve_status.publish(String(data='default_3'))
 
     def _solve(self):
         """内核求解逻辑：拍照→OCR→SymPy。返回 MathResult 或 None。"""
